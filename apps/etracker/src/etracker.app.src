@@ -1,0 +1,26 @@
+{application, etracker,
+ [
+  {description, "Torrent tracker"},
+  {vsn, "1"},
+  {modules, [
+             etracker,
+             etracker_app,
+             etracker_sup,
+             etracker_event,
+             etracker_db,
+             etracker_mnesia,
+             etracker_http_srv,
+             etracker_http_static,
+             etracker_http_request
+            ]},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib,
+                  crypto,
+                  sasl,
+                  lager
+                 ]},
+  {mod, { etracker_app, []}},
+  {env, []}
+ ]}.
