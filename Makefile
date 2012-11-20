@@ -20,11 +20,11 @@ endif
 
 all: build compile escript
 
-build: compile
+build: deps compile
 	$(REBAR) generate
 
 deps:
-	$(REBAR) deps
+	$(REBAR) get-deps
 	$(REBAR) compile
 
 compile:
