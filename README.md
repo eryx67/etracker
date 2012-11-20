@@ -1,17 +1,17 @@
-= README =
+# README #
 
-= Etracker =
+# Etracker #
 
   Простой BitTorrent трекер.
 
-= Установка =
+# Установка #
 
 
-== Зависимости ==
+## Зависимости ##
 
 * Erlang R15
 
-== Конфигурация ==
+## Конфигурация ##
 
     cd rel/files
 
@@ -27,7 +27,7 @@
     {answer_max_peers, 50},       % max number of peers to return
     {answer_interval, 1800},      % client interval value in answer to announce
 
-== Сборка ==
+## Сборка ##
 
     make
 
@@ -41,10 +41,10 @@
   * data файлы базы данных
   * erts-*, lib, releases служебные файлы виртуальной машины
 
-== Запуск ==
+## Запуск ##
 
     path_to_etracker_dir/bin/etracker start
 
-== Останов ==
+## Останов ##
 
     path_to_etracker_dir/bin/etracker stop
