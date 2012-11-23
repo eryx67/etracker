@@ -32,5 +32,6 @@
           downloaded = 0,
           uploaded = 0,
           left = 0,
+          finished = false, % client sent <<completed>> or connected as seeder
           mtime = erlang:now()
          }).

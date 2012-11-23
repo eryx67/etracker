@@ -1,5 +1,4 @@
-ERL_FLAGS= -pa $(CURDIR)/.eunit -pa $(CURDIR)/ebin -pa $(CURDIR)/deps/*/ebin \
-	-config etracker.config
+ERL_FLAGS= -pa $(CURDIR)/.eunit -pa $(CURDIR)/ebin -pa $(CURDIR)/deps/*/ebin
 
 PROJECT_PLT=$(CURDIR)/.project_plt
 
@@ -37,7 +36,7 @@ doc:
 	$(REBAR) skip_deps=true doc
 
 eunit: compile clean-common-test-data
-	ERL_FLAGS="$(ERL_FLAGS)" $(REBAR) skip_deps=true eunit
+	ERL_FLAGS="$(ERL_FLAGS) -config test.config" $(REBAR) skip_deps=true eunit
 
 ct: compile clean-common-test-data
 	$(REBAR) skip_deps=true ct
@@ -63,7 +62,7 @@ typer:
 shell: deps compile
 	- mkdir -p $(CURDIR)/data
 	- @$(REBAR) skip_deps=true eunit
-	@$(ERL) $(ERL_FLAGS) -boot start_sasl
+	@$(ERL) $(ERL_FLAGS) -boot start_sasl -config etracker.config
 
 pdf:
 	pandoc README.md -o README.pdf

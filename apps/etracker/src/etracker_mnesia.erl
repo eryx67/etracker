@@ -182,8 +182,7 @@ process_announce(#announce{event = <<"started">>, left=Left, info_hash=InfoHash}
 
             {AddSeeders1, AddLeechers1} =
                 case mnesia:read({torrent_user, TID}) of
-                    [] -> {AddSeeders, AddLeechers};
-                                                % duplicated event
+                    %% duplicated event
                     [#torrent_user{event=Event, left=OldLeft}] ->
                         if OldLeft == Left ->
                                 {0, 0}; % client status is unchanged
@@ -193,7 +192,8 @@ process_announce(#announce{event = <<"started">>, left=Left, info_hash=InfoHash}
                                 {1, -1}; % client changed from leecher to seeder
                            true ->
                                 {-1, 1} % client changed from seeder to leecher
-                        end
+                        end;
+                    _ -> {AddSeeders, AddLeechers}
                 end,
 
             case mnesia:read({torrent_info, InfoHash}) of
@@ -208,32 +208,28 @@ process_announce(#announce{event = <<"started">>, left=Left, info_hash=InfoHash}
                                    leechers=max(L+AddLeechers1, 0),
                                    mtime=erlang:now()})
             end,
-            mnesia:write(TorrentUser)
+            mnesia:write(TorrentUser#torrent_user{finished = Left == 0})
 	end;
-process_announce(#announce{event = <<"stopped">>, left=Left, info_hash=InfoHash},
+process_announce(#announce{event = <<"stopped">>, info_hash=InfoHash},
                  _TU=#torrent_user{id=TID}) ->
 	fun() ->
             {SubSeeders, SubLeechers} =
-                if Left == 0 -> {1, 0}; % is seeder
-                   true -> {0, 1} % is leecher
-                end,
-
-            {SubSeeders1, SubLeechers1} =
                 case mnesia:read({torrent_user, TID}) of
-                    [] -> {0, 0}; % duplicated event
-                    [_TU] ->
+                    [] -> {0, 0};
+                    [#torrent_user{finished=F}] ->
                         mnesia:delete({torrent_user, TID}),
-                        {SubSeeders, SubLeechers}
+                        if (F == true) ->
+                                {1, 0}; % is seeder
+                           true ->
+                                {0, 1}
+                        end
                 end,
             case mnesia:read({torrent_info, InfoHash}) of
                 [] -> mnesia:write(#torrent_info{info_hash = InfoHash});
-                [T=#torrent_info{
-                      seeders=S,
-                      leechers=L
-                     }] ->
+                [T=#torrent_info{seeders=S, leechers=L}] ->
                     mnesia:write(T#torrent_info{
-                                   seeders=max(S - SubSeeders1, 0),
-                                   leechers=max(L - SubLeechers1, 0),
+                                   seeders=max(S - SubSeeders, 0),
+                                   leechers=max(L - SubLeechers, 0),
                                    mtime=erlang:now()
                                   })
             end
@@ -244,8 +240,9 @@ process_announce(#announce{event = <<"completed">>, info_hash=InfoHash},
 	fun() ->
             {AddSeeders, AddLeechers} =
                 case mnesia:read({torrent_user, TID}) of
-                    [#torrent_user{event=Event}] ->
-                        {0, 0}; % duplicated event
+                    [#torrent_user{event=E, finished = F}] when E == Event
+                                                                orelse F == true ->
+                        {0, 0}; % duplicated event or seeder was already counted
                     _ ->
                         {1, -1}
                 end,
@@ -262,7 +259,7 @@ process_announce(#announce{event = <<"completed">>, info_hash=InfoHash},
                                    mtime=erlang:now()
                                   })
             end,
-            mnesia:write(TorrentUser)
+            mnesia:write(TorrentUser#torrent_user{finished = true})
 	end;
 %% Peer is making periodic announce
 process_announce(#announce{left=Left, info_hash=InfoHash}, TU=#torrent_user{id=TID}) ->
@@ -281,9 +278,9 @@ process_announce(#announce{left=Left, info_hash=InfoHash}, TU=#torrent_user{id=T
                     ok
             end,
             case mnesia:read({torrent_user, TID}) of
-                [] -> mnesia:write(TU);
-                [#torrent_user{event=Evt}] ->
-                    mnesia:write(TU#torrent_user{event=Evt, mtime=erlang:now()})
+                [] -> mnesia:write(TU#torrent_user{finished= Left == 0});
+                [#torrent_user{event=Evt, finished=F}] ->
+                    mnesia:write(TU#torrent_user{event=Evt, finished=F, mtime=erlang:now()})
             end
 	end.
 

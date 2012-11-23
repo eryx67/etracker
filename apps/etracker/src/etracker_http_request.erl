@@ -45,7 +45,10 @@ announce_request_reply(Req, Params) ->
             ClntInterval = client_random_interval(proplists:get_value(answer_interval, Params)),
             ClntMinInterval = ClntInterval div 2,
             MaxPeers = proplists:get_value(answer_max_peers, Params),
-            Compact = proplists:get_value(answer_compact, Params, C),
+            Compact = case proplists:get_value(answer_compact, Params, false) of
+                          true -> true;
+                          false -> C
+                      end,
             NW1 = if NW == 0 -> MaxPeers;
                      true -> NW
                   end,
@@ -148,13 +151,15 @@ request_attr_validate(Attr, Val) when Val < 0
                                                orelse Attr == left
                                                orelse Attr == numwant) ->
     <<"must be positive">>;
-request_attr_validate(_Attr=event, _Val=undefined)->
+request_attr_validate(_Attr=event, _Val=undefined) ->
     true;
-request_attr_validate(_Attr=event, _Val= <<"started">>)->
+request_attr_validate(_Attr=event, _Val= <<"">>) ->
     true;
-request_attr_validate(_Attr=event, _Val= <<"completed">>)->
+request_attr_validate(_Attr=event, _Val= <<"started">>) ->
     true;
-request_attr_validate(_Attr=event, _Val= <<"stopped">>)->
+request_attr_validate(_Attr=event, _Val= <<"completed">>) ->
+    true;
+request_attr_validate(_Attr=event, _Val= <<"stopped">>) ->
     true;
 request_attr_validate(_Attr=event, Val)->
     error_logger:warning_msg("Invalid announce request event ~w", [Val]),

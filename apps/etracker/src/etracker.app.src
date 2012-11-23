@@ -18,7 +18,6 @@
                   kernel,
                   stdlib,
                   crypto,
-                  sasl,
                   lager
                  ]},
   {mod, { etracker_app, []}},

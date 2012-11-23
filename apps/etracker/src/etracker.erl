@@ -4,7 +4,6 @@
 
 start() ->
     ensure_started(crypto),
-    ensure_started(sasl),
     ensure_started(cowboy),
     ensure_started(lager),
     application:start(etracker).
