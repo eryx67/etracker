@@ -22,6 +22,8 @@
 
 -define(SERVER, ?MODULE).
 
+-define(QUERY_CHUNK_SIZE, 1000).
+
 -define(TABLES, [torrent_info, torrent_user]).
 -record(state, {}).
 
@@ -69,7 +71,7 @@ init(_) ->
     proc_lib:spawn_link(fun setup/0),
     {ok, #state{}}.
 
-handle_call({torrent_info, InfoHash}, _From, State) ->
+handle_call({torrent_info, InfoHash}, _From, State) when is_binary(InfoHash) ->
     F = fun() -> mnesia:read({torrent_info, InfoHash}) end,
 	case mnesia:activity(sync_dirty, F) of
 		[] ->
@@ -78,6 +80,14 @@ handle_call({torrent_info, InfoHash}, _From, State) ->
 		[TI] ->
 			{reply, TI, State}
 	end;
+handle_call({torrent_infos, InfoHashes, _Pid}, _From, State) when is_list(InfoHashes) ->
+    Fun = fun (Callback) ->
+                  mnesia:activity(sync_dirty,
+                                  fun () ->
+                                          process_torrent_infos(InfoHashes, Callback)
+                                  end)
+          end,
+    {reply, Fun, State};
 handle_call({torrent_peers, InfoHash, Wanted, Exclude}, From, State) ->
     proc_lib:spawn(fun () ->
                            F = fun () ->
@@ -113,6 +123,30 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+process_torrent_infos([], Callback) ->
+    Q = qlc:q([TI || TI <- mnesia:table(torrent_info)]),
+    C = qlc:cursor(Q),
+    process_torrent_infos1(C, Callback);
+process_torrent_infos(IHs, Callback) ->
+    Data = lists:foldl(fun (IH, Acc) ->
+                        case mnesia:read({torrent_info, IH}) of
+                            [] ->
+                                Acc;
+                            [TI] ->
+                                [TI|Acc]
+                        end
+                end, [], IHs),
+    Callback(Data).
+
+process_torrent_infos1(Cursor, Callback) ->
+    case qlc:next_answers(Cursor, ?QUERY_CHUNK_SIZE) of
+        [] -> qlc:delete_cursor(Cursor),
+              [];
+        Data ->
+            Callback(Data),
+            process_torrent_infos1(Cursor, Callback)
+    end.
+
 process_torrent_peers(InfoHash, Wanted, Exclude) ->
     case mnesia:read({torrent_info, InfoHash}) of
         [] ->

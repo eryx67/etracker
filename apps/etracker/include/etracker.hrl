@@ -14,12 +14,17 @@
           trackerid %% Optional. If a previous announce contained a tracker id, it should be set here.
          }).
 
+-record(scrape, {
+          files = []
+         }).
+
 %% Database schema
 -record(torrent_info, {
           info_hash,
           leechers = 0,
           seeders = 0,
           completed = 0,
+          name,
           mtime = erlang:now(),
           ctime = erlang:now()
          }).

@@ -10,7 +10,7 @@
 
 %% API
 -export([start_link/0]).
--export([announce/1, torrent_info/1, torrent_peers/2, torrent_peers/3]).
+-export([announce/1, torrent_info/1, torrent_infos/1, torrent_peers/2, torrent_peers/3]).
 
 -define(SERVER, ?MODULE).
 
@@ -26,8 +26,11 @@ torrent_peers(InfoHash, Num) ->
 torrent_peers(InfoHash, Num, Exclude) ->
 	gen_server:call(?SERVER, {torrent_peers, InfoHash, Num, Exclude}).
 
-torrent_info(InfoHash) ->
+torrent_info(InfoHash) when is_binary(InfoHash) ->
 	gen_server:call(?SERVER, {torrent_info, InfoHash}).
+
+torrent_infos(InfoHashes) when is_list(InfoHashes) ->
+	gen_server:call(?SERVER, {torrent_infos, InfoHashes, self()}).
 
 confval(Key, Default) ->
     case application:get_env(Key) of

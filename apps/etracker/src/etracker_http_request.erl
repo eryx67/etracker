@@ -21,6 +21,13 @@ handle(Req, State=#state{request_type=announce,
     Headers = [{<<"Content-Type">>, <<"text/plain">>}],
     {ok, Req3} = cowboy_http_req:reply(Code, Headers, Body, Req2),
     {ok, Req3, State};
+handle(Req, State=#state{request_type=scrape,
+                         params=Params
+                        }) ->
+    {QsVals, Req1} = cowboy_http_req:qs_vals(Req),
+    lager:debug("received scrape request ~p", [QsVals]),
+    {ok, Req2} = scrape_request_reply(Req1, Params),
+    {ok, Req2, State};
 handle(Req, State) ->
     Body = <<"<h1>404</h1>">>,
     {ok, Req2} = cowboy_http_req:reply(404, [], Body, Req),
@@ -30,6 +37,40 @@ terminate(_Req, _State) ->
     ok.
 
 %% Internal functions
+scrape_request_reply(Req, Params) ->
+    Headers = [{<<"Content-Type">>, <<"text/plain">>}],
+    try parse_request(scrape, Req) of
+        {IHs, Req1} ->
+            {ok, Req2} = cowboy_http_req:chunked_reply(200, Headers, Req1),
+            SRI = proplists:get_value(scrape_request_interval, Params),
+            OpenData = ["d",
+                        etorrent_bcoding:encode(<<"files">>),
+                        "d"],
+            ok = cowboy_http_req:chunk(OpenData, Req2),
+            ResultsFun = fun ([]) ->
+                                 ok;
+                             (TorrentInfos) ->
+                                 Data = scrape_pack_torrent_infos(TorrentInfos),
+                                 ok = cowboy_http_req:chunk(Data, Req2)
+                         end,
+            CursorFn = etracker_db:torrent_infos(IHs),
+            CursorFn(ResultsFun),
+            CloseData = ["e",
+                         etorrent_bcoding:encode(<<"flags">>),
+                         etorrent_bcoding:encode([{<<"min_request_interval">>, SRI}]),
+                         "e"],
+            ok = cowboy_http_req:chunk(CloseData, Req2),
+            {ok, Req2}
+    catch
+        throw:Error ->
+            Body = etorrent_bcoding:encode([{<<"failure reason">>, Error}]),
+            cowboy_http_req:reply(200, Headers, Body, Req);
+        error:Error ->
+            error_logger:error_msg("Error when parsing announce ~w, backtrace ~p~n",
+                                   [Error,erlang:get_stacktrace()]),
+            cowboy_http_req:reply(400, Headers, <<"Invalid request">>, Req)
+    end.
+
 announce_request_reply(Req, Params) ->
     try parse_request(announce, Req) of
         {Ann, Req1} ->
@@ -74,6 +115,32 @@ announce_request_reply(Req, Params) ->
             {<<"Invalid request">>, 400, Req}
     end.
 
+scrape_pack_torrent_infos(TorrentInfos) ->
+    PackInfoHashFun = fun (#torrent_info{
+                              info_hash=IH,
+                              seeders=Complete,
+                              leechers=Incomplete,
+                              completed=Downloaded,
+                              name=Name
+                             }) ->
+                              Val1 = if is_binary(Name) ->
+                                         [{<<"name">>, Name}];
+                                        true ->
+                                             []
+                                     end,
+                              Val2 = [
+                                      {<<"complete">>, Complete},
+                                      {<<"incomplete">>, Incomplete},
+                                      {<<"downloaded">>, Downloaded}
+                                      | Val1
+                                     ],
+                              [etorrent_bcoding:encode(IH),etorrent_bcoding:encode(Val2)]
+                      end,
+    [PackInfoHashFun(TI) || TI <- TorrentInfos].
+
+parse_request(scrape, HttpReq) ->
+    parse_request_attr(info_hash, HttpReq, true);
+
 parse_request(announce, HttpReq) ->
     Attrs = record_info(fields, announce),
     {Values, Req1} = lists:mapfoldl(fun parse_request_attr/2, HttpReq, Attrs),
@@ -86,20 +153,35 @@ parse_request(announce, HttpReq) ->
     {Ann, Req1}.
 
 parse_request_attr(Attr, Req) ->
+    parse_request_attr(Attr, Req, false).
+
+parse_request_attr(Attr, Req, _Multi=false) ->
     {Val1, Req1} = cowboy_http_req:qs_val(list_to_binary(atom_to_list(Attr)), Req),
-    {Val2, Req2} = case Val1 of
+    request_attr_process(Attr, Val1, Req1);
+parse_request_attr(Attr, Req, _Multi=true) ->
+    AttrName = list_to_binary(atom_to_list(Attr)),
+    {Vals1, Req1} = cowboy_http_req:qs_vals(Req),
+    lists:foldl(fun ({K, V}, {A, R}) when K == AttrName ->
+                        {V1, R1} = request_attr_process(Attr, V, R),
+                        {[V1|A], R1};
+                    (_, Acc) ->
+                        Acc
+                end, {[], Req1}, Vals1).
+
+request_attr_process(Attr, Val, Req) ->
+    {Val1, Req1} = case Val of
                        undefined ->
-                           request_attr_default(Attr, Req1);
+                           request_attr_default(Attr, Req);
                        _ ->
-                           {request_attr_value(Attr, Val1), Req1}
+                           {request_attr_value(Attr, Val), Req}
                    end,
-    case request_attr_validate(Attr, Val2) of
+    case request_attr_validate(Attr, Val1) of
         true ->
             ok;
         Error ->
             throw(list_to_binary([atom_to_list(Attr), " ", Error]))
     end,
-    {Val2, Req2}.
+    {Val1, Req1}.
 
 request_attr_default(ip, Req) ->
     cowboy_http_req:peer_addr(Req);

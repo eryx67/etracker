@@ -146,11 +146,18 @@ dispatch_rules() ->
                                 {answer_max_peers, 50},
                                 {answer_interval, 60 * 30}
                                ]),
+    ScrapeParams = lists:map(fun ({Attr, Default}) ->
+                                       {Attr, confval(Attr, Default)}
+                               end,
+                               [
+                                {scrape_request_interval, 60 * 30}
+                               ]),
     %% {Host, list({Path, Handler, Opts})}
     [{'_', [
 
             {[], etracker_http_static, [<<"html">>,<<"index.html">>]}
             , {[<<"announce">>], etracker_http_request, [announce, AnnounceParams]}
+            , {[<<"scrape">>], etracker_http_request, [scrape, ScrapeParams]}
            ]}].
 
 confval(Key, Default) ->
