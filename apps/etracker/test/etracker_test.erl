@@ -1,6 +1,7 @@
 -module(etracker_test).
 
 -include_lib("eunit/include/eunit.hrl").
+-include("etracker.hrl").
 
 -define(PEERS, test_peers).
 -define(TRACKER_URL, "http://localhost:8080").
@@ -17,7 +18,54 @@ setup_announce() ->
     random_announce().
 
 stop(_SD) ->
-    ok.
+    etracker:stop(),
+    etorrent:stop_app() .
+
+cleaner_test_start() ->
+    application:load(etracker),
+    application:set_env(etracker, clean_interval, 5),
+    etracker:start(),
+    timer:sleep(1000),
+    cleaner_test_start1().
+
+cleaner_test_start1() ->
+    InfoHash = list_to_binary(random_string(20)),
+    PeerId1 = list_to_binary(random_string(20)),
+    PeerId2 = list_to_binary(random_string(20)),
+    Mtime = {Mega, Sec, Micro} = now(),
+    TI = #torrent_info{
+           info_hash=InfoHash,
+           leechers=3,
+           seeders=3
+           },
+    SeederMtime = Mtime = {Mega, Sec, Micro},
+    Seeder = #torrent_user{
+                id={InfoHash, PeerId1},
+                info_hash=InfoHash,
+                finished=true,
+                mtime=SeederMtime
+               },
+    LeecherMtime = {Mega, Sec + 10, Micro},
+    Leecher = #torrent_user{
+                 id={InfoHash, PeerId2},
+                 info_hash=InfoHash,
+                 finished=false,
+                 mtime=LeecherMtime
+                },
+    mnesia:activity(sync_dirty, fun () ->
+                                        ok = mnesia:write(TI),
+                                        ok = mnesia:write(Seeder),
+                                        ok = mnesia:write(Leecher)
+                                end),
+    [TI, [Seeder, Leecher]].
+
+cleaner_test_stop([TI, TUs]) ->
+    application:set_env(etracker, clean_interval, 2700),
+    mnesia:dirty_delete_object(TI),
+    lists:foreach(fun (TU) ->
+                          mnesia:dirty_delete_object(TU)
+                  end, TUs),
+    etracker:stop().
 
 etracker_test_() ->
     {setup,
@@ -40,6 +88,53 @@ etracker_test_() ->
               }]
      end
     }.
+
+etracker_cleaner_test_() ->
+    {setup,
+     fun cleaner_test_start/0,
+     fun cleaner_test_stop/1,
+     fun (SD) ->
+             [{timeout, 60,
+               [
+                cleaner_checks(SD)
+               ]}]
+     end
+    }.
+
+cleaner_checks([TI, TUs]) ->
+    mnesia:subscribe({table, torrent_info, simple}),
+    mnesia:subscribe({table, torrent_user, simple}),
+    cleaner_checks(TI, TUs, []).
+
+cleaner_checks(_TI, [], Acc) ->
+    mnesia:unsubscribe({table, torrent_info, simple}),
+    mnesia:unsubscribe({table, torrent_user, simple}),
+    Acc;
+cleaner_checks(TI, [TU|Rest], Acc) ->
+    {TI1, Tests} = cleaner_check_user(TI, TU, [false, false], []),
+    cleaner_checks(TI1, Rest, Acc ++ Tests).
+
+cleaner_check_user(TI, _TU, [ok, ok], Acc) ->
+    {TI, Acc};
+cleaner_check_user(TI=#torrent_info{info_hash=IH, seeders=S, leechers=L},
+                   TU=#torrent_user{id=Id, finished=F},
+                   [TIOk, TUOk], Acc) ->
+    receive
+        {mnesia_table_event, {delete, {torrent_user, Id}, _}} ->
+            cleaner_check_user(TI, TU, [TIOk, ok], Acc);
+        {mnesia_table_event, {write,
+                              TI1=#torrent_info{info_hash=IH, seeders=S1, leechers=L1}, _}} ->
+            Tests = if F == true ->
+                            [?_assertEqual(S1, S - 1),
+                             ?_assertEqual(L1, L)];
+                       true ->
+                            [?_assertEqual(S1, S),
+                             ?_assertEqual(L1, L - 1)]
+                    end,
+            cleaner_check_user(TI1, TU, [ok, TUOk], Acc ++ Tests);
+        _ ->
+            cleaner_check_user(TI, TU, [TIOk, TUOk], Acc)
+    end.
 
 leecher_first_started(Ann) ->
     [_Ih, PeerId, Port] = [orddict:fetch(K, Ann) || K <- [info_hash, peer_id, port]],

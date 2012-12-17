@@ -11,7 +11,7 @@
 %% API
 -export([start_link/0, add_handler/2, delete_handler/2]).
 
--export([announce/1]).
+-export([announce/1, cleanup_completed/0]).
 
 -include("etracker.hrl").
 
@@ -23,6 +23,9 @@
 -spec announce(#announce{}) -> ok.
 announce(Ann) ->
     notify({announce, Ann}).
+
+cleanup_completed() ->
+    notify(cleanup_completed).
 
 %% @doc Creates an event manager
 %% @end

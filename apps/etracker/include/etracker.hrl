@@ -1,3 +1,6 @@
+-define(ANNOUNCE_ANSWER_INTERVAL, 60 * 30).
+-define(ANNOUNCE_ANSWER_MAX_PEERS, 50).
+
 -record(announce, {
           info_hash, %% urlencoded 20-byte SHA1 hash of the value of the info key from the Metainfo file
           peer_id, %% urlencoded 20-byte string used as a unique ID for the client
@@ -30,7 +33,7 @@
          }).
 
 -record(torrent_user, {
-          id = {undefined, undefined},
+          id = {undefined, undefined},   % {info_hash, peer_id}
           peer = {undefined, undefined}, % {address, port}
           info_hash,
           event,

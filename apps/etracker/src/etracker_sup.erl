@@ -27,4 +27,5 @@ init([]) ->
     DbSrv = ?CHILD(etracker_db, worker),
     HttpSrv = ?CHILD(etracker_http_srv, worker),
     EventMgr = ?CHILD(etracker_event, worker),
-    {ok, {{one_for_one, 5, 10}, [EventMgr, DbSrv, HttpSrv]}}.
+    Cleaner = ?CHILD(etracker_cleaner, worker),
+    {ok, {{one_for_one, 5, 10}, [EventMgr, DbSrv, HttpSrv, Cleaner]}}.

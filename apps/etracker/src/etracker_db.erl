@@ -11,6 +11,7 @@
 %% API
 -export([start_link/0]).
 -export([announce/1, torrent_info/1, torrent_infos/1, torrent_peers/2, torrent_peers/3]).
+-export([expire_torrent_peers/1]).
 
 -define(SERVER, ?MODULE).
 
@@ -25,6 +26,9 @@ torrent_peers(InfoHash, Num) ->
     torrent_peers(InfoHash, Num, []).
 torrent_peers(InfoHash, Num, Exclude) ->
 	gen_server:call(?SERVER, {torrent_peers, InfoHash, Num, Exclude}).
+
+expire_torrent_peers(ExpireTime) ->
+    gen_server:call(?SERVER, {expire_torrent_peers, ExpireTime}).
 
 torrent_info(InfoHash) when is_binary(InfoHash) ->
 	gen_server:call(?SERVER, {torrent_info, InfoHash}).

@@ -20,6 +20,7 @@
 -define(SERVER, ?MODULE).
 
 -record(state, {}).
+-include("etracker.hrl").
 
 %%%===================================================================
 %%% API
@@ -143,8 +144,8 @@ dispatch_rules() ->
                                end,
                                [
                                 {answer_compact, false},
-                                {answer_max_peers, 50},
-                                {answer_interval, 60 * 30}
+                                {answer_max_peers, ?ANNOUNCE_ANSWER_MAX_PEERS},
+                                {answer_interval, ?ANNOUNCE_ANSWER_INTERVAL}
                                ]),
     ScrapeParams = lists:map(fun ({Attr, Default}) ->
                                        {Attr, confval(Attr, Default)}

@@ -25,7 +25,11 @@
     {http_num_acceptors, 16},     % pool of request acceptors
     {answer_compact, false},      % always return compact list of peers
     {answer_max_peers, 50},       % max number of peers to return
-    {answer_interval, 1800},      % client interval value in answer to announce
+    {answer_interval, 1800},      % client interval value in answer to
+                                  % announce
+    {clean_interval, 2700},        % database garbage clearing interval
+    {scrape_request_interval, 1800}, % minimum number of seconds to wait before
+                                     % scraping the tracker again
 
 ## Сборка ##
 

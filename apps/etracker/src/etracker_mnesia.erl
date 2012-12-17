@@ -37,7 +37,7 @@ setup(Nodes) ->
     ExistingTables = mnesia:system_info(tables),
     Tables = ?TABLES -- ExistingTables,
     create_tables(Nodes, Tables),
-    mnesia:wait_for_tables(?TABLES, 5000),
+    mnesia:wait_for_tables(?TABLES, 60000),
     ok.
 
 create_tables(Nodes, Tables) ->
@@ -55,7 +55,7 @@ create_table(torrent_user, Nodes) ->
     mnesia:create_table(torrent_user, [
                                        {type, set},
                                        {attributes, record_info(fields, torrent_user)},
-                                       {index, [info_hash]},
+                                       {index, [info_hash, mtime]},
                                        {disc_copies, Nodes}
                                       ]).
 
@@ -97,6 +97,15 @@ handle_call({torrent_peers, InfoHash, Wanted, Exclude}, From, State) ->
                            gen_server:reply(From, Peers)
                    end),
     {noreply, State};
+handle_call({expire_torrent_peers, ExpireTime}, From, State) ->
+    proc_lib:spawn(fun () ->
+                           F = fun () ->
+                                       process_expire_torrent_peers(ExpireTime)
+                               end,
+                           ok = mnesia:activity(sync_dirty, F),
+                           gen_server:reply(From, ok)
+                   end),
+    {noreply, State};
 
 handle_call(_Request, _From, State) ->
     Reply = ok,
@@ -123,6 +132,40 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+process_expire_torrent_peers(ExpireTime) ->
+    Q = qlc:q([TU || TU=#torrent_user{mtime=M} <- mnesia:table(torrent_user),  M < ExpireTime]),
+    C = qlc:cursor(Q),
+    process_expire_torrent_peers(C, orddict:new()).
+
+process_expire_torrent_peers(Cursor, Torrents) ->
+    case qlc:next_answers(Cursor, ?QUERY_CHUNK_SIZE) of
+        [] -> qlc:delete_cursor(Cursor),
+              orddict:fold(fun (InfoHash, {Seeders, Leechers}, Acc) ->
+                                   case mnesia:read({torrent_info, InfoHash}) of
+                                       [] ->
+                                           ok;
+                                       [TI=#torrent_info{seeders=S, leechers=L}] ->
+                                           mnesia:write(TI#torrent_info{
+                                                          seeders=max(0, S - Seeders),
+                                                          leechers=max(0, L - Leechers)
+                                                         })
+                                   end,
+                                   Acc
+                           end, [], Torrents),
+              ok;
+        TUs ->
+            Torrents1 = lists:foldl(fun (#torrent_user{id=Id={IH, _}, finished=F}, Ts) ->
+                                            mnesia:delete({torrent_user, Id}),
+                                            {S, L} = Val = if F == true -> {1, 0};
+                                                              true -> {0, 1}
+                                                           end,
+                                            orddict:update(IH, fun ({SC, LC}) ->
+                                                                       {SC + S, LC + L}
+                                                               end, Val, Ts)
+                                    end, Torrents, TUs),
+            process_expire_torrent_peers(Cursor, Torrents1)
+    end.
+
 process_torrent_infos([], Callback) ->
     Q = qlc:q([TI || TI <- mnesia:table(torrent_info)]),
     C = qlc:cursor(Q),
