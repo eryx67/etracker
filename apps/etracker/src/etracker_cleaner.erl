@@ -33,7 +33,7 @@ start_link() ->
     CleanInterval = confval(clean_interval, Default),
     CleanInterval1 = if CleanInterval =< AnswerInterval ->
                              lager:warning("~p must be greater than ~p, setting it to ~p",
-                                           [answer_interval, clean_interval, Default]),
+                                           [clean_interval, answer_interval, Default]),
                              Default;
                         true ->
                              CleanInterval
