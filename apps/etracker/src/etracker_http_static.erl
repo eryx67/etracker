@@ -3,51 +3,49 @@
 
 -export([init/3, handle/2, terminate/2]).
 
--export([html/1, css/1, js/1]).
+-export([html/2, css/2, js/2]).
 
-init({tcp, http}, Req, []) ->
-  {ok, Req, undefined_state};
-init({tcp, http}, Req, OnlyFile) ->
-  {ok, Req, OnlyFile}.
+-record(state, {application, www_dir, path}).
 
-handle(Req, undefined_state = State) ->
-  {[_|Path], Req2} = cowboy_http_req:path(Req), % strip <<"static">>
-  send(Req2, Path, State);
+init({tcp, http}, Req, {Params, Path}) ->
+    {ok, Req, #state{
+                 application=proplists:get_value(application, Params),
+                 www_dir=proplists:get_value(www_dir, Params),
+                 path=Path
+                }
+    }.
 
-handle(Req, OnlyFile = State) ->
-  send(Req, OnlyFile, State).
+handle(Req, S=#state{path=P}) when P == []
+                                       orelse P == undefined ->
+    {Path, Req2} = cowboy_http_req:path(Req),
+    handle(Req2, S#state{path=Path});
+handle(Req, S=#state{path=PathBins}) ->
+    send(Req, [ binary_to_list(P) || P <- PathBins ], S).
 
-send(Req, PathBins, State) ->
-  Path = [ binary_to_list(P) || P <- PathBins ],
-  case file(filename:join(Path)) of
-    {ok, Body} ->
-      Headers = [{<<"Content-Type">>, <<"text/html">>}],
-      {ok, Req2} = cowboy_http_req:reply(200, Headers, Body, Req),
-      {ok, Req2, State};
-    _ ->
-      {ok, Req2} = cowboy_http_req:reply(404, [], <<"404'd">>, Req),
-      {ok, Req2, State}
-  end.
+send(Req, Path, State=#state{www_dir=WwwDir}) ->
+    case file(filename:join(Path), WwwDir) of
+        {ok, Body} ->
+            Headers = [{<<"Content-Type">>, <<"text/html">>}],
+            {ok, Req2} = cowboy_http_req:reply(200, Headers, Body, Req),
+            {ok, Req2, State};
+        _ ->
+            etracker_event:unknown_query(Path),
+            {ok, Req2} = cowboy_http_req:reply(404, [], <<"404'd">>, Req),
+            {ok, Req2, State}
+    end.
 
 terminate(_Req, _State) ->
-  ok.
+    ok.
 
-html(Name) ->
-  type("html", Name).
-css(Name) ->
-  type("css", Name).
-js(Name) ->
-  type("js", Name).
+html(Name, WwwDir) ->
+    type("html", Name, WwwDir).
+css(Name, WwwDir) ->
+    type("css", Name, WwwDir).
+js(Name, WwwDir) ->
+    type("js", Name, WwwDir).
 
-type(Type, Name) ->
-  file(filename:join([Type, Name ++ Type])).
+type(Type, Name, WwwDir) ->
+    file(filename:join([Type, Name ++ Type]), WwwDir).
 
-file(Path) ->
-  Priv = priv(),
-  file:read_file(filename:join(Priv, Path)).
-
-priv() ->
-  case code:priv_dir(simple_server) of
-    {error,_} -> "priv";
-    Priv -> Priv
-  end.
+file(Path, WwwDir) ->
+    file:read_file(filename:join(WwwDir, Path)).

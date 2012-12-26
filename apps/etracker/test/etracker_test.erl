@@ -34,9 +34,9 @@ cleaner_test_start1() ->
     PeerId2 = list_to_binary(random_string(20)),
     Mtime = {Mega, Sec, Micro} = now(),
     TI = #torrent_info{
-           info_hash=InfoHash,
-           leechers=3,
-           seeders=3
+            info_hash=InfoHash,
+            leechers=3,
+            seeders=3
            },
     SeederMtime = Mtime = {Mega, Sec, Micro},
     Seeder = #torrent_user{
@@ -76,12 +76,14 @@ etracker_test_() ->
                fun (Ann) -> {inorder,
                              [Fun(Ann) || Fun <-
                                               [fun leecher_first_started/1,
+                                               fun leecher_first_invalid_requests/1,
                                                fun leecher_second_started/1,
                                                fun seeder_first_started/1,
                                                fun leecher_first_completed/1,
                                                fun scrape_all/1,
                                                fun scrape_some/1,
-                                               fun leecher_second_stopped/1
+                                               fun leecher_second_stopped/1,
+                                               fun check_stats_after_test/1
                                               ]
                              ]}
                end
@@ -94,10 +96,13 @@ etracker_cleaner_test_() ->
      fun cleaner_test_start/0,
      fun cleaner_test_stop/1,
      fun (SD) ->
-             [{timeout, 60,
-               [
-                cleaner_checks(SD)
-               ]}]
+             {inorder,
+              [{timeout, 60,
+                [
+                 cleaner_checks(SD)
+                ]},
+               check_stats_after_clean()
+              ]}
      end
     }.
 
@@ -150,6 +155,54 @@ leecher_first_started(Ann) ->
            end,
     [GenF(Resp1), GenF(Resp2)].
 
+leecher_first_invalid_requests(Ann) ->
+    Ann1 = orddict:store(info_hash, <<"bad_hash">>, Ann),
+    Ann2 = orddict:store(port, "bad_port", Ann),
+    Ann3 = orddict:erase(info_hash, Ann),
+    {ok, Resp1} = send_announce(orddict:to_list(Ann1)),
+    {ok, Resp2} = send_announce(orddict:to_list(Ann2)),
+    {ok, Resp3} = (catch send_announce(orddict:to_list(Ann3))),
+
+    [?_assertEqual([{<<"failure reason">>,<<"info_hash invalid value">>}], Resp1),
+     ?_assertMatch({{400, _R}, _H, _B}, Resp2),
+     ?_assertEqual([{<<"failure reason">>,<<"info_hash invalid value">>}], Resp3)
+    ].
+
+check_stats_after_clean() ->
+    KV = [{<<"seeders">>,0},
+          {<<"leechers">>,0},
+          {<<"peers">>,0},
+          {<<"unknown_queries">>,0},
+          {<<"invalid_queries">>,0},
+          {<<"scrapes">>,0},
+          {<<"announces">>,0},
+          {<<"failed_queries">>,0},
+          {<<"deleted_peers">>,3}],
+    check_stats(KV).
+
+check_stats_after_test(_) ->
+    KV = [{<<"seeders">>,1},
+          {<<"leechers">>,0},
+          {<<"peers">>,1},
+          {<<"unknown_queries">>,0},
+          {<<"invalid_queries">>,2},
+          {<<"scrapes">>,2},
+          {<<"announces">>,15},
+          {<<"failed_queries">>,1},
+          {<<"deleted_peers">>,0}],
+    check_stats(KV).
+
+check_stats(KV) ->
+    {ok, {{200, _}, _, Resp}} = lhttpc:request("http://localhost:8080/stats", get,
+                                               [{"Content-Type", "application/json"}], "", 1000),
+
+    Res = jiffy:decode(Resp),
+    ?debugVal(Res),
+    {[{<<"value">>, {KV2}}]} = Res,
+    [?_assertMatch({[{<<"value">>, _}]}, Res),
+     [?_assertEqual({K, V}, {K, proplists:get_value(K, KV2)}) || {K, V} <- KV]
+    ].
+
 leecher_first_completed(Ann) ->
     [{_, PeerId1, Port1}] = ets:lookup(?PEERS, leecher_second),
     [{_, PeerId2, Port2}] = ets:lookup(?PEERS, seeder_first),
@@ -173,15 +226,15 @@ leecher_first_completed(Ann) ->
     Checks3 = [{<<"incomplete">>, 1}, {<<"complete">>, 1}],
 
     GenF1 = fun (R, Checks) ->
-                   Peers = proplists:get_value(<<"peers">>, R),
-                   PeersIds = lists:filter(
-                                fun (P) ->
-                                        PI = binary_to_list(proplists:get_value(<<"peer_id">>, P)),
-                                        lists:member(PI, [PeerId1, PeerId2])
-                                end, Peers),
-                   [?_assertMatch([_, _], Peers), ?_assertEqual(length(PeersIds), 2) |
-                    [?_assertEqual(proplists:get_value(K, R), V) || {K, V} <- Checks]]
-           end,
+                    Peers = proplists:get_value(<<"peers">>, R),
+                    PeersIds = lists:filter(
+                                 fun (P) ->
+                                         PI = binary_to_list(proplists:get_value(<<"peer_id">>, P)),
+                                         lists:member(PI, [PeerId1, PeerId2])
+                                 end, Peers),
+                    [?_assertMatch([_, _], Peers), ?_assertEqual(length(PeersIds), 2) |
+                     [?_assertEqual(proplists:get_value(K, R), V) || {K, V} <- Checks]]
+            end,
     GenF2 = fun (R, Checks) ->
                     Peers = decode_compact_peers(proplists:get_value(<<"peers">>, R)),
 
@@ -192,7 +245,7 @@ leecher_first_completed(Ann) ->
                                                lists:sort([proplists:get_value(<<"port">>, P)
                                                            || P <- Peers]))],
                      [?_assertEqual(proplists:get_value(K, R), V) || {K, V} <- Checks]]
-           end,
+            end,
 
     [GenF1(Resp1, Checks1), GenF1(Resp2, Checks1), GenF2(Resp3, Checks2), GenF1(Resp4, Checks3), GenF1(Resp5, Checks3)].
 
@@ -334,7 +387,7 @@ contact_tracker_http(Request, Url, PL) ->
 
 build_tracker_url(announce, Url, PL) ->
     Event = proplists:get_value(event, PL),
-    InfoHash = proplists:get_value(info_hash, PL),
+    InfoHash = proplists:get_value(info_hash, PL, []),
     PeerId = proplists:get_value(peer_id, PL),
     Uploaded   = proplists:get_value(uploaded, PL),
     Downloaded = proplists:get_value(downloaded, PL),
@@ -355,7 +408,8 @@ build_tracker_url(announce, Url, PL) ->
                "" -> Request;
                started -> [{"event", "started"} | Request];
                stopped -> [{"event", "stopped"} | Request];
-               completed -> [{"event", "completed"} | Request]
+               completed -> [{"event", "completed"} | Request];
+               _ -> [{"event", atom_to_list(Event)} | Request]
            end,
     FlatUrl = lists:flatten(Url),
     Delim = case lists:member($?, FlatUrl) of

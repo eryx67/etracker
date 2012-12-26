@@ -1,6 +1,9 @@
 -module(etracker_http_request).
 -behaviour(cowboy_http_handler).
+
 -export([init/3, handle/2, terminate/2]).
+-export([rest_init/2, allowed_methods/2, content_types_provided/2]).
+-export([stats_reply_json/2, stats_reply_html/2]).
 
 -include("etracker.hrl").
 
@@ -8,9 +11,69 @@
           request_type,
           params = []
          }).
-
-init({tcp, http}, Req, [ReqType, ReqParams]) ->
+init({tcp, http}, _Req, {stats, _ReqParams}) ->
+    {upgrade, protocol, cowboy_http_rest};
+init({tcp, http}, Req, {ReqType, ReqParams}) ->
     {ok, Req, #state{request_type = ReqType, params=ReqParams}}.
+
+rest_init(Req, {ReqType, ReqParams}) ->
+    {ok, Req, #state{request_type = ReqType, params=ReqParams}}.
+
+allowed_methods(Req, S=#state{request_type=stats}) ->
+    {['HEAD', 'GET', 'POST'], Req, S}.
+
+content_types_provided(Req, S=#state{request_type=stats}) ->
+    Types = [
+             {{<<"application">>, <<"json">>, []}, stats_reply_json},
+             {{<<"text">>, <<"html">>, []}, stats_reply_html}
+            ],
+    {Types, Req, S}.
+
+stats_reply_json(Req, State) ->
+    {Answer, Req1} = stats_process(json, Req),
+    Resp = jiffy:encode(Answer),
+    {Resp, Req1, State}.
+
+stats_reply_html(Req, State) ->
+    {Answer, Req1} = stats_process(html, Req),
+    {ok, Resp} = stats_dtl:render(Answer),
+    {Resp, Req1, State}.
+
+stats_process(Type, Req) ->
+    {QVs, Req1} = cowboy_http_req:qs_vals(Req),
+    ValidKeys = [atom_to_list(K) || K <- etracker:info(info_keys)],
+    Answer =
+        try
+            Keys =
+                lists:foldl(fun ({K, V}, Acc) ->
+                                    case string:to_lower(binary_to_list(K)) of
+                                        "id" ->
+                                            V2 = string:to_lower(binary_to_list(V)),
+                                            case lists:member(V2, ValidKeys) of
+                                                true ->
+                                                    [list_to_atom(V2)|Acc];
+                                                _ ->
+                                                    error({invalid_key, V2})
+                                            end;
+                                        _ ->
+                                            Acc
+                                    end
+                            end, [], QVs),
+
+            case {Type, etracker:info(Keys)} of
+                {json, Res} -> {[{value, {Res}}]};
+                {html, Res} -> [{value, [[{name, K}, {value, V}] || {K, V} <- Res]}]
+            end
+        catch
+            error:E ->
+                case Type of
+                    json ->
+                        {[{error, {[E]}}]};
+                    html ->
+                        [{error, io_lib:format("~p", [E])}]
+                end
+        end,
+    {Answer, Req1}.
 
 handle(Req, State=#state{request_type=announce,
                          params=Params
@@ -60,13 +123,16 @@ scrape_request_reply(Req, Params) ->
                          etorrent_bcoding:encode([{<<"min_request_interval">>, SRI}]),
                          "e"],
             ok = cowboy_http_req:chunk(CloseData, Req2),
+            etracker_event:scrape(IHs),
             {ok, Req2}
     catch
         throw:Error ->
+            etracker_event:invalid_query({scrape, Error}),
             Body = etorrent_bcoding:encode([{<<"failure reason">>, Error}]),
             cowboy_http_req:reply(200, Headers, Body, Req);
         error:Error ->
-            error_logger:error_msg("Error when parsing announce ~w, backtrace ~p~n",
+            etracker_event:failed_query({scrape, Error}),
+            error_logger:error_msg("Error when parsing scrape ~w, backtrace ~p~n",
                                    [Error,erlang:get_stacktrace()]),
             cowboy_http_req:reply(400, Headers, <<"Invalid request">>, Req)
     end.
@@ -108,8 +174,10 @@ announce_request_reply(Req, Params) ->
             {Body, 200, Req1}
     catch
         throw:Error ->
+            etracker_event:invalid_query({announce, Error}),
             {etorrent_bcoding:encode([{<<"failure reason">>, Error}]), 200, Req};
         error:Error ->
+            etracker_event:failed_query({announce, Error}),
             error_logger:error_msg("Error when parsing announce ~w, backtrace ~p~n",
                                    [Error,erlang:get_stacktrace()]),
             {<<"Invalid request">>, 400, Req}
@@ -124,7 +192,7 @@ scrape_pack_torrent_infos(TorrentInfos) ->
                               name=Name
                              }) ->
                               Val1 = if is_binary(Name) ->
-                                         [{<<"name">>, Name}];
+                                             [{<<"name">>, Name}];
                                         true ->
                                              []
                                      end,

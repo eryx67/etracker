@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Etracker stats</title>
+  </head>
+  <body>
+    {% if error %}
+    <h1>Error - {{ error }}</h1>
+    {% endif %}
+    {% if value %}
+    <ul>
+      {% for param in value %}
+      <li>{{ param.name}} {{param.value}}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </body>
+</html>

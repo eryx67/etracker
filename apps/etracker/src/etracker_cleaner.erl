@@ -28,17 +28,10 @@ force_clean(Time) ->
     ok.
 
 start_link() ->
-    AnswerInterval = confval(answer_interval, ?ANNOUNCE_ANSWER_MAX_PEERS),
+    AnswerInterval = confval(answer_interval, ?ANNOUNCE_ANSWER_INTERVAL),
     Default = round(AnswerInterval * 1.5),
     CleanInterval = confval(clean_interval, Default),
-    CleanInterval1 = if CleanInterval =< AnswerInterval ->
-                             lager:warning("~p must be greater than ~p, setting it to ~p",
-                                           [clean_interval, answer_interval, Default]),
-                             Default;
-                        true ->
-                             CleanInterval
-                     end,
-    proc_lib:start_link(?MODULE, init, [self(), #state{clean_interval=CleanInterval1 * 1000}]).
+    proc_lib:start_link(?MODULE, init, [self(), #state{clean_interval=CleanInterval * 1000}]).
 
 init(Parent, State=#state{clean_interval=CleanInterval}) ->
     register(?MODULE, self()),
@@ -71,8 +64,8 @@ loop(Parent, Debug, State=#state{tref=TRef}) ->
 
 do_clean(ExpireTime, State=#state{clean_interval=CleanInterval}) ->
     NxtExpireTime = now(),
-    ok = etracker_db:expire_torrent_peers(ExpireTime),
-    etracker_event:cleanup_completed(),
+    Cnt = etracker_db:expire_torrent_peers(ExpireTime),
+    etracker_event:cleanup_completed(Cnt),
     lager:info("~s cleanup completed", [?MODULE]),
     {ok, TRef} = timer:send_after(CleanInterval, {clean, NxtExpireTime}),
     State#state{tref=TRef, expire_time=NxtExpireTime}.

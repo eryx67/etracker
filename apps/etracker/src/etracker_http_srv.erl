@@ -22,17 +22,6 @@
 -record(state, {}).
 -include("etracker.hrl").
 
-%%%===================================================================
-%%% API
-%%%===================================================================
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Starts the server
-%%
-%% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
-%% @end
-%%--------------------------------------------------------------------
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
@@ -40,26 +29,14 @@ start_link() ->
 %%% gen_server callbacks
 %%%===================================================================
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Initializes the server
-%%
-%% @spec init(Args) -> {ok, State} |
-%%                     {ok, State, Timeout} |
-%%                     ignore |
-%%                     {stop, Reason}
-%% @end
-%%--------------------------------------------------------------------
 init([]) ->
     Port = confval(http_port, 8080),
     Ip = confval(http_ip, "127.0.0.1"),
     NumAcceptors = confval(http_num_acceptors, 16),
     IpStr = case is_list(Ip) of true -> Ip; false -> inet_parse:ntoa(Ip) end,
     error_logger:info_msg("~s listening on http://~s:~B/~n", [?SERVER, IpStr,Port]),
-    %%
-    %% Name, NbAcceptors, Transport, TransOpts, Protocol, ProtoOpts
-    cowboy:start_listener(http, NumAcceptors,
+    {ok, App} = application:get_application(),
+    cowboy:start_listener({App, http}, NumAcceptors,
                           cowboy_tcp_transport, [{port, Port}],
                           cowboy_http_protocol, [{dispatch, dispatch_rules()}]
                          ),
@@ -68,15 +45,6 @@ init([]) ->
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
-%% Handling call messages
-%%
-%% @spec handle_call(Request, From, State) ->
-%%                                   {reply, Reply, State} |
-%%                                   {reply, Reply, State, Timeout} |
-%%                                   {noreply, State} |
-%%                                   {noreply, State, Timeout} |
-%%                                   {stop, Reason, Reply, State} |
-%%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
 handle_call(_Request, _From, State) ->
@@ -86,11 +54,6 @@ handle_call(_Request, _From, State) ->
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
-%% Handling cast messages
-%%
-%% @spec handle_cast(Msg, State) -> {noreply, State} |
-%%                                  {noreply, State, Timeout} |
-%%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
 handle_cast(_Msg, State) ->
@@ -99,11 +62,6 @@ handle_cast(_Msg, State) ->
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
-%% Handling all non call/cast messages
-%%
-%% @spec handle_info(Info, State) -> {noreply, State} |
-%%                                   {noreply, State, Timeout} |
-%%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
 handle_info(_Info, State) ->
@@ -112,23 +70,16 @@ handle_info(_Info, State) ->
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
-%% This function is called by a gen_server when it is about to
-%% terminate. It should be the opposite of Module:init/1 and do any
-%% necessary cleaning up. When it returns, the gen_server terminates
-%% with Reason. The return value is ignored.
-%%
-%% @spec terminate(Reason, State) -> void()
 %% @end
 %%--------------------------------------------------------------------
 terminate(_Reason, _State) ->
+    {ok, App} = application:get_application(),
+    cowboy:stop_listener({App, http}),
     ok.
 
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
-%% Convert process state when code is changed
-%%
-%% @spec code_change(OldVsn, State, Extra) -> {ok, NewState}
 %% @end
 %%--------------------------------------------------------------------
 code_change(_OldVsn, State, _Extra) ->
@@ -139,6 +90,13 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 
 dispatch_rules() ->
+    {ok, App} = application:get_application(),
+    PrivDir = case code:priv_dir(App) of
+                  {error,_} -> filename:absname("priv");
+                  Priv -> Priv
+              end,
+    WwwDir = filename:join([PrivDir, confval(www_dir, "www")]),
+    CommonParams = [{www_dir, WwwDir}, {application, App}],
     AnnounceParams = lists:map(fun ({Attr, Default}) ->
                                        {Attr, confval(Attr, Default)}
                                end,
@@ -146,19 +104,20 @@ dispatch_rules() ->
                                 {answer_compact, false},
                                 {answer_max_peers, ?ANNOUNCE_ANSWER_MAX_PEERS},
                                 {answer_interval, ?ANNOUNCE_ANSWER_INTERVAL}
-                               ]),
+                               ]) ++ CommonParams,
     ScrapeParams = lists:map(fun ({Attr, Default}) ->
                                        {Attr, confval(Attr, Default)}
                                end,
                                [
                                 {scrape_request_interval, 60 * 30}
-                               ]),
+                               ]) ++ CommonParams,
     %% {Host, list({Path, Handler, Opts})}
     [{'_', [
 
-            {[], etracker_http_static, [<<"html">>,<<"index.html">>]}
-            , {[<<"announce">>], etracker_http_request, [announce, AnnounceParams]}
-            , {[<<"scrape">>], etracker_http_request, [scrape, ScrapeParams]}
+            {[], etracker_http_static, {CommonParams, [<<"html">>,<<"index.html">>]}}
+            , {[<<"announce">>], etracker_http_request, {announce, AnnounceParams}}
+            , {[<<"scrape">>], etracker_http_request, {scrape, ScrapeParams}}
+            , {[<<"stats">>], etracker_http_request, {stats, CommonParams}}
            ]}].
 
 confval(Key, Default) ->

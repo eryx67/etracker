@@ -57,7 +57,9 @@ create_table(torrent_user, Nodes) ->
                                        {attributes, record_info(fields, torrent_user)},
                                        {index, [info_hash, mtime]},
                                        {disc_copies, Nodes}
-                                      ]).
+                                      ]),
+    mnesia:add_table_index(torrent_user, info_hash),
+    mnesia:add_table_index(torrent_user, mtime).
 
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
@@ -102,11 +104,26 @@ handle_call({expire_torrent_peers, ExpireTime}, From, State) ->
                            F = fun () ->
                                        process_expire_torrent_peers(ExpireTime)
                                end,
-                           ok = mnesia:activity(sync_dirty, F),
-                           gen_server:reply(From, ok)
+                           Ret = mnesia:activity(sync_dirty, F),
+                           gen_server:reply(From, Ret)
                    end),
     {noreply, State};
-
+handle_call({system_info, torrents}, _From, State) ->
+    {reply, mnesia:table_info(torrent_info, size), State};
+handle_call({system_info, peers}, _From, State) ->
+    {reply, mnesia:table_info(torrent_user, size), State};
+handle_call({system_info, Key}, From, State) when Key == seeders
+                                                  orelse Key == leechers ->
+    Query = qlc:q([true || #torrent_user{finished=F} <- mnesia:table(torrent_user),
+                           F == (Key == seeders andalso true orelse false)]),
+    proc_lib:spawn(fun () ->
+                           F = fun () ->
+                                       qlc:fold(fun (_V, Acc) -> Acc + 1 end, 0, Query)
+                               end,
+                           Ret = mnesia:activity(sync_dirty, F),
+                           gen_server:reply(From, Ret)
+                   end),
+    {noreply, State};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -150,9 +167,8 @@ process_expire_torrent_peers(Cursor, Torrents) ->
                                                           leechers=max(0, L - Leechers)
                                                          })
                                    end,
-                                   Acc
-                           end, [], Torrents),
-              ok;
+                                   Acc + 1
+                           end, 0, Torrents);
         TUs ->
             Torrents1 = lists:foldl(fun (#torrent_user{id=Id={IH, _}, finished=F}, Ts) ->
                                             mnesia:delete({torrent_user, Id}),

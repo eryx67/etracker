@@ -1,4 +1,5 @@
-ERL_FLAGS= -pa $(CURDIR)/.eunit -pa $(CURDIR)/ebin -pa $(CURDIR)/deps/*/ebin
+ERL_FLAGS= -pa $(CURDIR)/apps/etracker/.eunit -pa $(CURDIR)/apps/*/ebin \
+	-pa $(CURDIR)/deps/*/ebin
 
 PROJECT_PLT=$(CURDIR)/.project_plt
 
@@ -62,7 +63,7 @@ typer:
 shell: deps compile
 	- mkdir -p $(CURDIR)/data
 	- @$(REBAR) skip_deps=true eunit
-	@$(ERL) $(ERL_FLAGS) -boot start_sasl -config etracker.config
+	$(ERL) $(ERL_FLAGS) -boot start_sasl -config etracker.config
 
 pdf:
 	pandoc README.md -o README.pdf
