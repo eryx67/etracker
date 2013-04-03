@@ -244,11 +244,11 @@ process_torrent_peers(PeerType, InfoHash, Wanted, Available, Exclude) ->
             qlc:e(Query);
        true ->
             Candidates = gen_random_seq(Available1, Wanted),
-            {_, _, Ret} = qlc:fold(fun (TU, {[C|Cs], C, Acc}) ->
-                                           {Cs, C+1, [PeerInfoF(TU)|Acc]};
-                                       (_TU, {Cs, Cnt, Acc}) ->
+            {_, _, Ret} = qlc:fold(fun (PI, {[C|Cs], C, Acc}) ->
+                                           {Cs, C+1, [PI|Acc]};
+                                       (_PI, {Cs, Cnt, Acc}) ->
                                            {Cs, Cnt + 1, Acc}
-                                   end, {Candidates, 1, []}),
+                                   end, {Candidates, 1, []}, Query),
             Ret
     end.
 

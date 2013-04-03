@@ -281,6 +281,8 @@ request_attr_value(Attr, Val) when Attr == port
     Int;
 request_attr_value(_Attr=no_peer_id, Val) ->
     Val /= undefined;
+request_attr_value(_Attr=event, _Val= <<"paused">>) ->
+    <<"">>;
 request_attr_value(_Attr, Val) ->
     Val.
 
