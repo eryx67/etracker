@@ -115,4 +115,5 @@ code_change(_OldVsn, State, _Extra) ->
 %% @end
 -spec notify(term()) -> ok.
 notify(What) ->
-    gen_event:notify(?SERVER, What).
+    gen_event:notify(?SERVER, What),
+    ok.

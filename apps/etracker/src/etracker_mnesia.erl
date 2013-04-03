@@ -11,7 +11,7 @@
 -behaviour(gen_server).
 
 %% API
--export([setup/0, setup/1, start_link/0]).
+-export([setup/1, setup/2, start_link/0, start_link/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -25,19 +25,21 @@
 -define(QUERY_CHUNK_SIZE, 1000).
 
 -define(TABLES, [torrent_info, torrent_user]).
+-define(TABLES_TIMEOUT, 60000).
 -record(state, {}).
 
-setup() ->
-    setup([node()]).
+setup(Opts) ->
+    setup([node()], Opts).
 
-setup(Nodes) ->
+setup(Nodes, Opts) ->
+    TablesTimeout = proplists:get_value(timeout, Opts, ?TABLES_TIMEOUT),
     mnesia:create_schema(Nodes),
     mnesia:change_table_copy_type(schema, node(), disc_copies),
     mnesia:start(),
     ExistingTables = mnesia:system_info(tables),
     Tables = ?TABLES -- ExistingTables,
     create_tables(Nodes, Tables),
-    mnesia:wait_for_tables(?TABLES, 60000),
+    mnesia:wait_for_tables(?TABLES, TablesTimeout),
     ok.
 
 create_tables(Nodes, Tables) ->
@@ -62,15 +64,19 @@ create_table(torrent_user, Nodes) ->
     mnesia:add_table_index(torrent_user, mtime).
 
 start_link() ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+    start_link({local, ?SERVER}, []).
+
+start_link(Name, Opts) ->
+    TablesTimeout = proplists:get_value(timeout, Opts, ?TABLES_TIMEOUT),
+    gen_server:start_link(Name, ?MODULE, Opts, [{timeout, TablesTimeout}]).
 
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
 
-init(_) ->
+init(Opts) ->
     random:seed(erlang:now()),
-    proc_lib:spawn_link(fun setup/0),
+    setup(Opts),
     {ok, #state{}}.
 
 handle_call({torrent_info, InfoHash}, _From, State) when is_binary(InfoHash) ->

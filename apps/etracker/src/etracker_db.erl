@@ -36,8 +36,12 @@
 start_link() ->
     ets:new(?INFO_TBL, [named_table, set, public, {write_concurrency, true}]),
     ets:insert(?INFO_TBL, [{K, 0} || K <- ?INFO_COUNTERS]),
-    Module = confval(db_module, etracker_mnesia),
-    gen_server:start_link({local, ?SERVER}, Module, [], []).
+    {Module, Opts} = case confval(db_module, etracker_mnesia) of
+                         ModOpts = {_M, _Os} -> ModOpts;
+                         Mod when is_atom(Mod) ->
+                             {Mod, []}
+                     end,
+    Module:start_link({local, ?SERVER}, Opts).
 
 announce(Ann) ->
 	gen_server:cast(?SERVER, {announce, Ann}).
