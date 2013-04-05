@@ -1,7 +1,7 @@
 {application, etracker,
  [
   {description, "Torrent tracker"},
-  {vsn, "1"},
+  {vsn, "1.0.0"},
   {modules, [
              etracker,
              etracker_app,

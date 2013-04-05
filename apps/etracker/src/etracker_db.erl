@@ -52,7 +52,7 @@ torrent_peers(InfoHash, Num, Exclude) ->
 	gen_server:call(?SERVER, {torrent_peers, InfoHash, Num, Exclude}).
 
 expire_torrent_peers(ExpireTime) ->
-    gen_server:call(?SERVER, {expire_torrent_peers, ExpireTime}).
+    gen_server:call(?SERVER, {expire_torrent_peers, ExpireTime}, infinity).
 
 torrent_info(InfoHash) when is_binary(InfoHash) ->
 	gen_server:call(?SERVER, {torrent_info, InfoHash}).

@@ -1,5 +1,5 @@
 ERL_FLAGS= -pa $(CURDIR)/apps/etracker/.eunit -pa $(CURDIR)/apps/*/ebin \
-	-pa $(CURDIR)/deps/*/ebin
+	-pa $(CURDIR)/deps/*/ebin -setcookie etracker
 
 PROJECT_PLT=$(CURDIR)/.project_plt
 
@@ -63,7 +63,11 @@ typer:
 shell: deps compile
 	- mkdir -p $(CURDIR)/data
 	- @$(REBAR) skip_deps=true eunit
-	$(ERL) $(ERL_FLAGS) -boot start_sasl -config etracker.config
+	$(ERL) -name etracker@127.0.0.1 $(ERL_FLAGS) -boot start_sasl -config etracker.config
+
+etop:
+	erl -name etop@127.0.0.1 -hidden -s etop -s erlang halt -output text \
+		-node etracker@127.0.0.1 -setcookie etracker
 
 pdf:
 	pandoc README.md -o README.pdf

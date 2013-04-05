@@ -156,7 +156,7 @@ announce_request_reply(Req, Params) ->
                           true -> true;
                           false -> C
                       end,
-            NW1 = if NW == 0 -> MaxPeers;
+            NW1 = if NW == 0 orelse NW > MaxPeers -> MaxPeers;
                      true -> NW
                   end,
             #torrent_info{
@@ -178,8 +178,8 @@ announce_request_reply(Req, Params) ->
             {etorrent_bcoding:encode([{<<"failure reason">>, Error}]), 200, Req};
         error:Error ->
             etracker_event:failed_query({announce, Error}),
-            error_logger:error_msg("Error when parsing announce ~w, backtrace ~p~n",
-                                   [Error,erlang:get_stacktrace()]),
+            error_logger:error_msg("Error when parsing announce ~w~n** Request was ~w~n**Backtrace ~p~n",
+                                   [Error, Req, erlang:get_stacktrace()]),
             {<<"Invalid request">>, 400, Req}
     end.
 

@@ -101,7 +101,7 @@ handle_call({torrent_peers, InfoHash, Wanted, Exclude}, From, State) ->
                            F = fun () ->
                                        process_torrent_peers(InfoHash, Wanted, Exclude)
                                end,
-                           Peers = mnesia:activity(sync_dirty, F),
+                           Peers = mnesia:activity(async_dirty, F),
                            gen_server:reply(From, Peers)
                    end),
     {noreply, State};
@@ -126,7 +126,7 @@ handle_call({system_info, Key}, From, State) when Key == seeders
                            F = fun () ->
                                        qlc:fold(fun (_V, Acc) -> Acc + 1 end, 0, Query)
                                end,
-                           Ret = mnesia:activity(sync_dirty, F),
+                           Ret = mnesia:activity(async_dirty, F),
                            gen_server:reply(From, Ret)
                    end),
     {noreply, State};
@@ -136,7 +136,7 @@ handle_call(_Request, _From, State) ->
 
 handle_cast({announce, Peer}, _State) ->
 	F = process_announce(Peer),
-	mnesia:activity(sync_dirty, F),
+	mnesia:activity(async_dirty, F),
 	{noreply, _State};
 handle_cast(stop, State) ->
     {stop, normal, State};
@@ -158,11 +158,12 @@ code_change(_OldVsn, State, _Extra) ->
 process_expire_torrent_peers(ExpireTime) ->
     Q = qlc:q([TU || TU=#torrent_user{mtime=M} <- mnesia:table(torrent_user),  M < ExpireTime]),
     C = qlc:cursor(Q),
-    process_expire_torrent_peers(C, orddict:new()).
+    process_expire_torrent_peers(C, orddict:new(), []).
 
-process_expire_torrent_peers(Cursor, Torrents) ->
+process_expire_torrent_peers(Cursor, Torrents, Users) ->
     case qlc:next_answers(Cursor, ?QUERY_CHUNK_SIZE) of
         [] -> qlc:delete_cursor(Cursor),
+              lists:foreach(fun (Id) -> mnesia:delete({torrent_user, Id}) end, Users),
               orddict:fold(fun (InfoHash, {Seeders, Leechers}, Acc) ->
                                    case mnesia:read({torrent_info, InfoHash}) of
                                        [] ->
@@ -176,16 +177,18 @@ process_expire_torrent_peers(Cursor, Torrents) ->
                                    Acc + 1
                            end, 0, Torrents);
         TUs ->
-            Torrents1 = lists:foldl(fun (#torrent_user{id=Id={IH, _}, finished=F}, Ts) ->
-                                            mnesia:delete({torrent_user, Id}),
+            {Torrents1, Users1} = lists:foldl(
+                                    fun (#torrent_user{id=Id={IH, _}, finished=F}, {Ts, Us}) ->
                                             {S, L} = Val = if F == true -> {1, 0};
                                                               true -> {0, 1}
                                                            end,
-                                            orddict:update(IH, fun ({SC, LC}) ->
-                                                                       {SC + S, LC + L}
-                                                               end, Val, Ts)
-                                    end, Torrents, TUs),
-            process_expire_torrent_peers(Cursor, Torrents1)
+                                            {orddict:update(IH, fun ({SC, LC}) ->
+                                                                        {SC + S, LC + L}
+                                                                end, Val, Ts),
+                                             [Id|Us]
+                                            }
+                                    end, {Torrents, Users}, TUs),
+            process_expire_torrent_peers(Cursor, Torrents1, Users1)
     end.
 
 process_torrent_infos([], Callback) ->
