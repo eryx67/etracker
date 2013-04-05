@@ -96,15 +96,12 @@ handle_call({torrent_infos, InfoHashes, _Pid}, _From, State) when is_list(InfoHa
                                   end)
           end,
     {reply, Fun, State};
-handle_call({torrent_peers, InfoHash, Wanted, Exclude}, From, State) ->
-    proc_lib:spawn(fun () ->
-                           F = fun () ->
-                                       process_torrent_peers(InfoHash, Wanted, Exclude)
-                               end,
-                           Peers = mnesia:activity(async_dirty, F),
-                           gen_server:reply(From, Peers)
-                   end),
-    {noreply, State};
+handle_call({torrent_peers, InfoHash, Wanted, Exclude}, _From, State) ->
+    F = fun () ->
+                process_torrent_peers(InfoHash, Wanted, Exclude)
+        end,
+    Peers = mnesia:activity(async_dirty, F),
+    {reply, Peers, State};
 handle_call({expire_torrent_peers, ExpireTime}, From, State) ->
     proc_lib:spawn(fun () ->
                            F = fun () ->
@@ -252,12 +249,11 @@ process_torrent_peers(PeerType, InfoHash, Wanted, Available, Exclude) ->
     if Available1 =< Wanted ->
             qlc:e(Query);
        true ->
-            Candidates = gen_random_seq(Available1, Wanted),
-            {_, _, Ret} = qlc:fold(fun (PI, {[C|Cs], C, Acc}) ->
-                                           {Cs, C+1, [PI|Acc]};
-                                       (_PI, {Cs, Cnt, Acc}) ->
-                                           {Cs, Cnt + 1, Acc}
-                                   end, {Candidates, 1, []}, Query),
+            Cursor = qlc:cursor(Query),
+            Offset = random:uniform(Available1 - Wanted),
+            seek_cursor(Cursor, Offset),
+            Ret = qlc:next_answers(Cursor, Wanted),
+            qlc:delete_cursor(Cursor),
             Ret
     end.
 
@@ -386,16 +382,15 @@ process_announce(#announce{left=Left, info_hash=InfoHash}, TU=#torrent_user{id=T
             end
 	end.
 
-gen_random_seq(Max, Num) ->
-    gen_random_seq(Max, Num, []).
-
-gen_random_seq(_Max, 0, Acc) ->
-    lists:sort(Acc);
-gen_random_seq(Max, Num, Acc) ->
-    V = random:uniform(Max),
-    case lists:member(V, Acc) of
-        true ->
-            gen_random_seq(Max, Num, Acc);
-        _ ->
-            gen_random_seq(Max, Num - 1, [V|Acc])
+seek_cursor(_C, Offset) when Offset == 0 ->
+    ok;
+seek_cursor(C, Offset) when Offset =< 100 ->
+    qlc:next_answers(C, Offset),
+    ok;
+seek_cursor(C, Offset) ->
+    Len = length(qlc:next_answers(C, 100)),
+    if (Len < 100) ->
+            ok;
+       true ->
+            seek_cursor(C, Offset - Len)
     end.
