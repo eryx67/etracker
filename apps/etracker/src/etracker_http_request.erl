@@ -163,13 +163,15 @@ announce_request_reply(Req, Params) ->
                seeders = Complete,
                leechers = Incomplete
               } = etracker_db:torrent_info(IH),
-            Peers = etracker_db:torrent_peers(IH, NW1, [PI]),
+            Peers1 = etracker_db:torrent_peers(IH, MaxPeers + 1),
+            Peers2 = [P || P <- Peers1, element(1, P) /= PI],
+            Peers3 = lists:sublist(Peers2, NW1),
             Body = etorrent_bcoding:encode([
                                             {<<"interval">>, ClntInterval},
                                             {<<"min interval">>, ClntMinInterval},
                                             {<<"complete">>, Complete},
                                             {<<"incomplete">>, Incomplete},
-                                            {<<"peers">>, announce_reply_peers(Peers, NPI, Compact)}
+                                            {<<"peers">>, announce_reply_peers(Peers3, NPI, Compact)}
                                            ]),
             {Body, 200, Req1}
     catch

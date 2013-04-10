@@ -4,10 +4,12 @@
   {vsn, "1.0.0"},
   {modules, [
              etracker,
+             etracker_env,
              etracker_app,
              etracker_sup,
              etracker_event,
              etracker_db,
+             etracker_db_cache,
              etracker_mnesia,
              etracker_cleaner,
              etracker_http_srv,

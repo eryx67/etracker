@@ -81,7 +81,7 @@ init(Opts) ->
 
 handle_call({torrent_info, InfoHash}, _From, State) when is_binary(InfoHash) ->
     F = fun() -> mnesia:read({torrent_info, InfoHash}) end,
-	case mnesia:activity(sync_dirty, F) of
+	case mnesia:activity(async_dirty, F) of
 		[] ->
 			{reply, #torrent_info{}, State};
 
@@ -90,15 +90,15 @@ handle_call({torrent_info, InfoHash}, _From, State) when is_binary(InfoHash) ->
 	end;
 handle_call({torrent_infos, InfoHashes, _Pid}, _From, State) when is_list(InfoHashes) ->
     Fun = fun (Callback) ->
-                  mnesia:activity(sync_dirty,
+                  mnesia:activity(async_dirty,
                                   fun () ->
                                           process_torrent_infos(InfoHashes, Callback)
                                   end)
           end,
     {reply, Fun, State};
-handle_call({torrent_peers, InfoHash, Wanted, Exclude}, _From, State) ->
+handle_call({torrent_peers, InfoHash, Wanted}, _From, State) ->
     F = fun () ->
-                process_torrent_peers(InfoHash, Wanted, Exclude)
+                process_torrent_peers(InfoHash, Wanted)
         end,
     Peers = mnesia:activity(async_dirty, F),
     {reply, Peers, State};
@@ -131,10 +131,10 @@ handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
 
-handle_cast({announce, Peer}, _State) ->
+handle_cast({announce, Peer}, State) ->
 	F = process_announce(Peer),
-	mnesia:activity(async_dirty, F),
-	{noreply, _State};
+    mnesia:activity(sync_dirty, F),
+	{noreply, State};
 handle_cast(stop, State) ->
     {stop, normal, State};
 handle_cast(_Msg, State) ->
@@ -212,37 +212,35 @@ process_torrent_infos1(Cursor, Callback) ->
             process_torrent_infos1(Cursor, Callback)
     end.
 
-process_torrent_peers(InfoHash, Wanted, Exclude) ->
+process_torrent_peers(InfoHash, Wanted) ->
     case mnesia:read({torrent_info, InfoHash}) of
         [] ->
             [];
         [#torrent_info{seeders=S, leechers=L}] ->
-            Seeders = process_torrent_peers(seeders, InfoHash, Wanted, S, Exclude),
+            Seeders = process_torrent_peers(seeders, InfoHash, Wanted, S),
             RestWanted = max(0, Wanted - length(Seeders)),
-            Leechers = process_torrent_peers(leechers, InfoHash, RestWanted, L, Exclude),
+            Leechers = process_torrent_peers(leechers, InfoHash, RestWanted, L),
             Seeders ++ Leechers
     end.
 
-process_torrent_peers(_PeerType, _InfoHash, Wanted, Available, _Exclude) when Wanted == 0
-                                                                              orelse Available == 0 ->
+process_torrent_peers(_PeerType, _InfoHash, Wanted, Available) when Wanted == 0
+                                                                    orelse Available == 0 ->
     [];
-process_torrent_peers(PeerType, InfoHash, Wanted, Available, Exclude) ->
+process_torrent_peers(PeerType, InfoHash, Wanted, Available) ->
     PeerInfoF = fun (#torrent_user{id={_, PeerId}, peer=Peer}) ->
                         {PeerId, Peer}
                 end,
     Query =
         case PeerType of
             seeders ->
-                qlc:q([PeerInfoF(TU) || TU=#torrent_user{id={_, PI}, info_hash=IH, left=L}
+                qlc:q([PeerInfoF(TU) || TU=#torrent_user{info_hash=IH, left=L}
                                             <- mnesia:table(torrent_user),
-                                        IH == InfoHash, L == 0,
-                                        lists:member(PI, Exclude) == false
+                                        IH == InfoHash, L == 0
                       ]);
             leechers ->
-                qlc:q([PeerInfoF(TU) || TU=#torrent_user{id={_, PI}, info_hash=IH, left=L}
+                qlc:q([PeerInfoF(TU) || TU=#torrent_user{info_hash=IH, left=L}
                                             <- mnesia:table(torrent_user),
-                                        IH == InfoHash, L /= 0,
-                                        lists:member(PI, Exclude) == false
+                                        IH == InfoHash, L /= 0
                       ])
         end,
     Available1 = max(Wanted, Available),

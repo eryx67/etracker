@@ -29,7 +29,10 @@
    {answer_interval, 1800},      % client interval value in answer to announce
    {scrape_request_interval, 1800},  % minimum number of seconds to wait before
                                      % scraping the tracker again
-   {clean_interval, 2700}        % database garbage clearing interval
+   {clean_interval, 2700},       % database garbage clearing interval
+   {db_cache_size, 1000000},     % entries in db cache
+   {db_cache_peers_ttl, 120},    % seconds to keep peers per infohash
+                                 % in cache, 0 means no cache
 
 </pre>
 

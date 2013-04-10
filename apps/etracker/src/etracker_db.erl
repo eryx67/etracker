@@ -11,7 +11,7 @@
 %% API
 -export([start_link/0]).
 -export([system_info/0, system_info/1, system_info_update_counter/2]).
--export([announce/1, torrent_info/1, torrent_infos/1, torrent_peers/2, torrent_peers/3]).
+-export([announce/1, torrent_info/1, torrent_infos/1, torrent_peers/2]).
 -export([expire_torrent_peers/1]).
 
 -define(SERVER, ?MODULE).
@@ -47,9 +47,22 @@ announce(Ann) ->
 	gen_server:cast(?SERVER, {announce, Ann}).
 
 torrent_peers(InfoHash, Num) ->
-    torrent_peers(InfoHash, Num, []).
-torrent_peers(InfoHash, Num, Exclude) ->
-	gen_server:call(?SERVER, {torrent_peers, InfoHash, Num, Exclude}).
+    CacheTTL = confval(db_cache_peers_ttl, 0),
+    CacheKey = {torrent_peers, InfoHash},
+    Req = {torrent_peers, InfoHash, Num},
+    case CacheTTL of
+        0 ->
+            gen_server:call(?SERVER, Req);
+        _ ->
+            case etracker_db_cache:get(CacheKey) of
+                undefined ->
+                    Res = gen_server:call(?SERVER, Req),
+                    etracker_db_cache:put_ttl(CacheKey, Res, CacheTTL),
+                    Res;
+                {ok, Res} ->
+                    Res
+            end
+    end.
 
 expire_torrent_peers(ExpireTime) ->
     gen_server:call(?SERVER, {expire_torrent_peers, ExpireTime}, infinity).
@@ -93,7 +106,4 @@ system_info_update_counter(Key, Inc) when Key == announces
     ets:update_counter(?INFO_TBL, Key, Inc).
 
 confval(Key, Default) ->
-    case application:get_env(Key) of
-        undefined -> Default;
-        {ok, Val} -> Val
-    end.
+    etracker_env:get(Key, Default).
