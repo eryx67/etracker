@@ -11,7 +11,7 @@
 -behaviour(gen_server).
 
 %% API
--export([setup/1, setup/2, start_link/0, start_link/2]).
+-export([setup/1, setup/2, start_link/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -63,12 +63,9 @@ create_table(torrent_user, Nodes) ->
     mnesia:add_table_index(torrent_user, info_hash),
     mnesia:add_table_index(torrent_user, mtime).
 
-start_link() ->
-    start_link({local, ?SERVER}, []).
-
-start_link(Name, Opts) ->
+start_link(Opts) ->
     TablesTimeout = proplists:get_value(timeout, Opts, ?TABLES_TIMEOUT),
-    gen_server:start_link(Name, ?MODULE, Opts, [{timeout, TablesTimeout}]).
+    gen_server:start_link(?MODULE, Opts, [{timeout, TablesTimeout}]).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -140,6 +137,10 @@ handle_cast(stop, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
+handle_info(stop, State) ->
+    {stop, shutdown, State};
+handle_info({'EXIT', _, _}, State) ->
+    {stop, shutdown, State};
 handle_info(_Info, State) ->
     {noreply, State}.
 

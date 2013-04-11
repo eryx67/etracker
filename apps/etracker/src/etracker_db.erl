@@ -9,7 +9,7 @@
 -module(etracker_db).
 
 %% API
--export([start_link/0]).
+-export([start_link/0, stop/0]).
 -export([system_info/0, system_info/1, system_info_update_counter/2]).
 -export([announce/1, torrent_info/1, torrent_infos/1, torrent_peers/2]).
 -export([expire_torrent_peers/1]).
@@ -33,18 +33,26 @@
 
 -define(INFO_KEYS, (?INFO_COUNTERS ++ ?INFO_DB_KEYS)).
 
+-define(TIMEOUT, 30 * 1000).
+
 start_link() ->
     ets:new(?INFO_TBL, [named_table, set, public, {write_concurrency, true}]),
     ets:insert(?INFO_TBL, [{K, 0} || K <- ?INFO_COUNTERS]),
-    {Module, Opts} = case confval(db_module, etracker_mnesia) of
-                         ModOpts = {_M, _Os} -> ModOpts;
-                         Mod when is_atom(Mod) ->
-                             {Mod, []}
-                     end,
-    Module:start_link({local, ?SERVER}, Opts).
+    DefaultOpts = {
+      [{worker_module, etracker_mnesia},
+       {size, 5}, {max_overflow, 10}
+      ],
+      []
+     },
+    {PoolOpts, WorkerArgs} = confval(db, DefaultOpts),
+    PoolArgs = [{name, {local, ?SERVER}}|PoolOpts],
+    poolboy:start_link(PoolArgs, WorkerArgs).
+
+stop() ->
+    poolboy:stop(?SERVER).
 
 announce(Ann) ->
-	gen_server:cast(?SERVER, {announce, Ann}).
+	db_cast({announce, Ann}).
 
 torrent_peers(InfoHash, Num) ->
     CacheTTL = confval(db_cache_peers_ttl, 0),
@@ -52,11 +60,11 @@ torrent_peers(InfoHash, Num) ->
     Req = {torrent_peers, InfoHash, Num},
     case CacheTTL of
         0 ->
-            gen_server:call(?SERVER, Req);
+            db_call(Req);
         _ ->
             case etracker_db_cache:get(CacheKey) of
                 undefined ->
-                    Res = gen_server:call(?SERVER, Req),
+                    Res = db_call(Req),
                     etracker_db_cache:put_ttl(CacheKey, Res, CacheTTL),
                     Res;
                 {ok, Res} ->
@@ -65,13 +73,13 @@ torrent_peers(InfoHash, Num) ->
     end.
 
 expire_torrent_peers(ExpireTime) ->
-    gen_server:call(?SERVER, {expire_torrent_peers, ExpireTime}, infinity).
+    db_call({expire_torrent_peers, ExpireTime}, infinity).
 
 torrent_info(InfoHash) when is_binary(InfoHash) ->
-	gen_server:call(?SERVER, {torrent_info, InfoHash}).
+	db_call({torrent_info, InfoHash}).
 
 torrent_infos(InfoHashes) when is_list(InfoHashes) ->
-	gen_server:call(?SERVER, {torrent_infos, InfoHashes, self()}).
+	db_call({torrent_infos, InfoHashes, self()}).
 
 system_info() ->
     [{K, system_info(K)} || K <- ?INFO_DB_KEYS] ++ ets:tab2list(?INFO_TBL).
@@ -81,7 +89,7 @@ system_info(Key) when Key == torrents
                       orelse Key == seeders
                       orelse Key == leechers
                       orelse Key == peers ->
-    gen_server:call(?SERVER, {system_info, Key});
+    db_call({system_info, Key});
 system_info(Key) when Key == announces
                       orelse Key == scrapes
                       orelse Key == unknown_queries
@@ -107,3 +115,20 @@ system_info_update_counter(Key, Inc) when Key == announces
 
 confval(Key, Default) ->
     etracker_env:get(Key, Default).
+
+db_call(Args) ->
+    db_call(Args, ?TIMEOUT).
+
+db_call(Args, Timeout) ->
+    poolboy:transaction(?SERVER,
+                        fun (W) ->
+                                gen_server:call(W, Args, Timeout)
+                        end,
+                        Timeout).
+
+db_cast(Args) ->
+    poolboy:transaction(?SERVER,
+                        fun (W) ->
+                                gen_server:cast(W, Args)
+                        end,
+                        ?TIMEOUT).
