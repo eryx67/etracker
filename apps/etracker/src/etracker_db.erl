@@ -85,9 +85,24 @@ system_info() ->
     [{K, system_info(K)} || K <- ?INFO_DB_KEYS] ++ ets:tab2list(?INFO_TBL).
 
 system_info(info_keys) -> ?INFO_KEYS;
+system_info(Key) when Key == seeders
+                      orelse Key == leechers ->
+    CacheTTL = confval(db_cache_peers_ttl, 0),
+    Req = CacheKey = {system_info, Key},
+    case CacheTTL of
+        0 ->
+            db_call(Req, infinity);
+        _ ->
+            case etracker_db_cache:get(CacheKey) of
+                undefined ->
+                    Res = db_call(Req, infinity),
+                    etracker_db_cache:put_ttl(CacheKey, Res, CacheTTL),
+                    Res;
+                {ok, Res} ->
+                    Res
+            end
+    end;
 system_info(Key) when Key == torrents
-                      orelse Key == seeders
-                      orelse Key == leechers
                       orelse Key == peers ->
     db_call({system_info, Key});
 system_info(Key) when Key == announces

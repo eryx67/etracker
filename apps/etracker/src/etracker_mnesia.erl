@@ -17,12 +17,12 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
--include_lib("stdlib/include/qlc.hrl").
+-include_lib("stdlib/include/ms_transform.hrl").
 -include("etracker.hrl").
 
 -define(SERVER, ?MODULE).
 
--define(QUERY_CHUNK_SIZE, 1000).
+-define(QUERY_CHUNK_SIZE, 10000).
 
 -define(TABLES, [torrent_info, torrent_user]).
 -define(TABLES_TIMEOUT, 60000).
@@ -99,31 +99,31 @@ handle_call({torrent_peers, InfoHash, Wanted}, _From, State) ->
         end,
     Peers = mnesia:activity(async_dirty, F),
     {reply, Peers, State};
-handle_call({expire_torrent_peers, ExpireTime}, From, State) ->
-    proc_lib:spawn(fun () ->
-                           F = fun () ->
-                                       process_expire_torrent_peers(ExpireTime)
-                               end,
-                           Ret = mnesia:activity(sync_dirty, F),
-                           gen_server:reply(From, Ret)
-                   end),
-    {noreply, State};
+handle_call({expire_torrent_peers, ExpireTime}, _From, State) ->
+    F = fun () ->
+                process_expire_torrent_peers(ExpireTime)
+        end,
+    Reply = mnesia:activity(sync_dirty, F),
+    {reply, Reply, State};
 handle_call({system_info, torrents}, _From, State) ->
     {reply, mnesia:table_info(torrent_info, size), State};
 handle_call({system_info, peers}, _From, State) ->
     {reply, mnesia:table_info(torrent_user, size), State};
-handle_call({system_info, Key}, From, State) when Key == seeders
-                                                  orelse Key == leechers ->
-    Query = qlc:q([true || #torrent_user{finished=F} <- mnesia:table(torrent_user),
-                           F == (Key == seeders andalso true orelse false)]),
-    proc_lib:spawn(fun () ->
-                           F = fun () ->
-                                       qlc:fold(fun (_V, Acc) -> Acc + 1 end, 0, Query)
-                               end,
-                           Ret = mnesia:activity(async_dirty, F),
-                           gen_server:reply(From, Ret)
-                   end),
-    {noreply, State};
+handle_call({system_info, seeders}, _From, State) ->
+    Fun = fun (#torrent_user{finished=F}, Acc) when F == true ->
+                  Acc + 1;
+              (_, Acc) -> Acc
+          end,
+    Reply = mnesia:activity(async_dirty, fun () -> mnesia:foldl(Fun, 0, torrent_user) end),
+    {reply, Reply, State};
+handle_call({system_info, leechers}, _From, State) ->
+    Fun = fun (#torrent_user{finished=F}, Acc) when F == false ->
+                  Acc + 1;
+              (_, Acc) ->
+                  Acc
+          end,
+    Reply = mnesia:activity(async_dirty, fun () -> mnesia:foldl(Fun, 0, torrent_user) end),
+    {reply, Reply, State};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -154,64 +154,58 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 process_expire_torrent_peers(ExpireTime) ->
-    Q = qlc:q([TU || TU=#torrent_user{mtime=M} <- mnesia:table(torrent_user),  M < ExpireTime]),
-    C = qlc:cursor(Q),
-    process_expire_torrent_peers(C, orddict:new(), []).
-
-process_expire_torrent_peers(Cursor, Torrents, Users) ->
-    case qlc:next_answers(Cursor, ?QUERY_CHUNK_SIZE) of
-        [] -> qlc:delete_cursor(Cursor),
-              lists:foreach(fun (Id) -> mnesia:delete({torrent_user, Id}) end, Users),
-              orddict:fold(fun (InfoHash, {Seeders, Leechers}, Acc) ->
-                                   case mnesia:read({torrent_info, InfoHash}) of
-                                       [] ->
-                                           ok;
-                                       [TI=#torrent_info{seeders=S, leechers=L}] ->
-                                           mnesia:write(TI#torrent_info{
-                                                          seeders=max(0, S - Seeders),
-                                                          leechers=max(0, L - Leechers)
-                                                         })
-                                   end,
-                                   Acc + 1
-                           end, 0, Torrents);
-        TUs ->
-            {Torrents1, Users1} = lists:foldl(
-                                    fun (#torrent_user{id=Id={IH, _}, finished=F}, {Ts, Us}) ->
-                                            {S, L} = Val = if F == true -> {1, 0};
-                                                              true -> {0, 1}
-                                                           end,
-                                            {orddict:update(IH, fun ({SC, LC}) ->
-                                                                        {SC + S, LC + L}
-                                                                end, Val, Ts),
-                                             [Id|Us]
-                                            }
-                                    end, {Torrents, Users}, TUs),
-            process_expire_torrent_peers(Cursor, Torrents1, Users1)
+    Q = ets:fun2ms(fun(#torrent_user{id=Id, finished=F, mtime=M}) when M < ExpireTime ->
+                           {Id, F}
+                   end),
+    case mnesia:select(torrent_user, Q, ?QUERY_CHUNK_SIZE, read) of
+        {Res, _Cont} ->
+            {Torrents, Users} =
+                lists:foldl(fun ({Id={IH, _}, F}, {Ts, Us}) ->
+                                    {S, L} = Val = if F == true -> {1, 0};
+                                                      true -> {0, 1}
+                                                   end,
+                                    {orddict:update(IH, fun ({SC, LC}) ->
+                                                                {SC + S, LC + L}
+                                                        end, Val, Ts),
+                                     [Id|Us]
+                                    }
+                            end, {orddict:new(), []}, Res),
+            lists:foreach(fun (Id) -> mnesia:delete({torrent_user, Id}) end, Users),
+            orddict:fold(fun (InfoHash, {Seeders, Leechers}, Acc) ->
+                                 case mnesia:read({torrent_info, InfoHash}) of
+                                     [] ->
+                                         ok;
+                                     [TI=#torrent_info{seeders=S, leechers=L}] ->
+                                         mnesia:write(TI#torrent_info{
+                                                        seeders=max(0, S - Seeders),
+                                                        leechers=max(0, L - Leechers)
+                                                       })
+                                 end,
+                                 Acc + 1
+                         end, 0, Torrents);
+        '$end_of_table' ->
+            0
     end.
 
 process_torrent_infos([], Callback) ->
-    Q = qlc:q([TI || TI <- mnesia:table(torrent_info)]),
-    C = qlc:cursor(Q),
-    process_torrent_infos1(C, Callback);
+    Q = ets:fun2ms(fun(TI) -> TI end),
+    process_torrent_infos1(mnesia:select(torrent_info, Q, ?QUERY_CHUNK_SIZE, read), Callback);
 process_torrent_infos(IHs, Callback) ->
     Data = lists:foldl(fun (IH, Acc) ->
-                        case mnesia:read({torrent_info, IH}) of
-                            [] ->
-                                Acc;
-                            [TI] ->
-                                [TI|Acc]
-                        end
-                end, [], IHs),
+                               case mnesia:read({torrent_info, IH}) of
+                                   [] ->
+                                       Acc;
+                                   [TI] ->
+                                       [TI|Acc]
+                               end
+                       end, [], IHs),
     Callback(Data).
 
-process_torrent_infos1(Cursor, Callback) ->
-    case qlc:next_answers(Cursor, ?QUERY_CHUNK_SIZE) of
-        [] -> qlc:delete_cursor(Cursor),
-              [];
-        Data ->
-            Callback(Data),
-            process_torrent_infos1(Cursor, Callback)
-    end.
+process_torrent_infos1({Data, Cont}, Callback) ->
+    Callback(Data),
+    process_torrent_infos1(mnesia:select(Cont), Callback);
+process_torrent_infos1('$end_of_table', _Callback) ->
+    ok.
 
 process_torrent_peers(InfoHash, Wanted) ->
     case mnesia:read({torrent_info, InfoHash}) of
@@ -228,33 +222,39 @@ process_torrent_peers(_PeerType, _InfoHash, Wanted, Available) when Wanted == 0
                                                                     orelse Available == 0 ->
     [];
 process_torrent_peers(PeerType, InfoHash, Wanted, Available) ->
-    PeerInfoF = fun (#torrent_user{id={_, PeerId}, peer=Peer}) ->
-                        {PeerId, Peer}
-                end,
     Query =
         case PeerType of
             seeders ->
-                qlc:q([PeerInfoF(TU) || TU=#torrent_user{info_hash=IH, left=L}
-                                            <- mnesia:table(torrent_user),
-                                        IH == InfoHash, L == 0
-                      ]);
+                ets:fun2ms(fun(#torrent_user{id={_, PeerId}, peer=Peer,
+                                                 info_hash=IH, left=L}) when IH == InfoHash,
+                                                                             L == 0 ->
+                                       {PeerId, Peer}
+                           end);
             leechers ->
-                qlc:q([PeerInfoF(TU) || TU=#torrent_user{info_hash=IH, left=L}
-                                            <- mnesia:table(torrent_user),
-                                        IH == InfoHash, L /= 0
-                      ])
+                ets:fun2ms(fun(#torrent_user{id={_, PeerId}, peer=Peer,
+                                             info_hash=IH, left=L}) when IH == InfoHash,
+                                                                         L /= 0 ->
+                                   {PeerId, Peer}
+                           end)
         end,
     Available1 = max(Wanted, Available),
     if Available1 =< Wanted ->
-            qlc:e(Query);
+            mnesia:select(torrent_user, Query);
        true ->
-            Cursor = qlc:cursor(Query),
             Offset = random:uniform(Available1 - Wanted),
-            seek_cursor(Cursor, Offset),
-            Ret = qlc:next_answers(Cursor, Wanted),
-            qlc:delete_cursor(Cursor),
-            Ret
+            Cursor = mnesia:select(torrent_user, Query, Wanted, read),
+            Data = process_torrent_peers_seek(Cursor, Offset, Wanted, []),
+            lists:nthtail(max(length(Data) - Wanted, 0), Data)
     end.
+
+process_torrent_peers_seek({Data, _C}, _O, Wanted, Last) when length(Data) < Wanted ->
+    Last ++ Data;
+process_torrent_peers_seek({Data, _C}, Offset, _W, Last) when Offset =< 0 ->
+    Last ++ Data;
+process_torrent_peers_seek({Data, Cont}, Offset, Wanted, _Last) ->
+    process_torrent_peers_seek(mnesia:select(Cont), Offset - length(Data), Wanted, Data);
+process_torrent_peers_seek('$end_of_table', _O, _W, Last) ->
+    Last.
 
 process_announce(A=#announce{
                       event=Evt,
