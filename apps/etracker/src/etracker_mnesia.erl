@@ -11,7 +11,7 @@
 -behaviour(gen_server).
 
 %% API
--export([setup/1, setup/2, start_link/1]).
+-export([setup/1, setup/2, start_link/1, dump_tables/0]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -42,6 +42,9 @@ setup(Nodes, Opts) ->
     mnesia:wait_for_tables(?TABLES, TablesTimeout),
     ok.
 
+dump_tables() ->
+    mnesia:dump_tables(?TABLES).
+
 create_tables(Nodes, Tables) ->
     lists:foreach(fun (Tbl) ->
                           create_table(Tbl, Nodes)
@@ -51,14 +54,14 @@ create_table(torrent_info, Nodes) ->
     mnesia:create_table(torrent_info, [
                                        {type, set},
                                        {attributes, record_info(fields, torrent_info)},
-                                       {disc_copies, Nodes}
+                                       {ram_copies, Nodes}
                                       ]);
 create_table(torrent_user, Nodes) ->
     mnesia:create_table(torrent_user, [
                                        {type, set},
                                        {attributes, record_info(fields, torrent_user)},
                                        {index, [info_hash, mtime]},
-                                       {disc_copies, Nodes}
+                                       {ram_copies, Nodes}
                                       ]),
     mnesia:add_table_index(torrent_user, info_hash),
     mnesia:add_table_index(torrent_user, mtime).
@@ -77,8 +80,8 @@ init(Opts) ->
     {ok, #state{}}.
 
 handle_call({torrent_info, InfoHash}, _From, State) when is_binary(InfoHash) ->
-    F = fun() -> mnesia:read({torrent_info, InfoHash}) end,
-	case mnesia:activity(async_dirty, F) of
+    F = fun() -> mnesia:dirty_read({torrent_info, InfoHash}) end,
+	case mnesia:activity(ets, F) of
 		[] ->
 			{reply, #torrent_info{}, State};
 
@@ -87,7 +90,7 @@ handle_call({torrent_info, InfoHash}, _From, State) when is_binary(InfoHash) ->
 	end;
 handle_call({torrent_infos, InfoHashes, _Pid}, _From, State) when is_list(InfoHashes) ->
     Fun = fun (Callback) ->
-                  mnesia:activity(async_dirty,
+                  mnesia:activity(ets,
                                   fun () ->
                                           process_torrent_infos(InfoHashes, Callback)
                                   end)
@@ -97,13 +100,13 @@ handle_call({torrent_peers, InfoHash, Wanted}, _From, State) ->
     F = fun () ->
                 process_torrent_peers(InfoHash, Wanted)
         end,
-    Peers = mnesia:activity(async_dirty, F),
+    Peers = mnesia:activity(ets, F),
     {reply, Peers, State};
 handle_call({expire_torrent_peers, ExpireTime}, _From, State) ->
     F = fun () ->
                 process_expire_torrent_peers(ExpireTime)
         end,
-    Reply = mnesia:activity(sync_dirty, F),
+    Reply = mnesia:activity(ets, F),
     {reply, Reply, State};
 handle_call({system_info, torrents}, _From, State) ->
     {reply, mnesia:table_info(torrent_info, size), State};
@@ -114,7 +117,7 @@ handle_call({system_info, seeders}, _From, State) ->
                   Acc + 1;
               (_, Acc) -> Acc
           end,
-    Reply = mnesia:activity(async_dirty, fun () -> mnesia:foldl(Fun, 0, torrent_user) end),
+    Reply = mnesia:activity(ets, fun () -> mnesia:foldl(Fun, 0, torrent_user) end),
     {reply, Reply, State};
 handle_call({system_info, leechers}, _From, State) ->
     Fun = fun (#torrent_user{finished=F}, Acc) when F == false ->
@@ -122,7 +125,7 @@ handle_call({system_info, leechers}, _From, State) ->
               (_, Acc) ->
                   Acc
           end,
-    Reply = mnesia:activity(async_dirty, fun () -> mnesia:foldl(Fun, 0, torrent_user) end),
+    Reply = mnesia:activity(ets, fun () -> mnesia:foldl(Fun, 0, torrent_user) end),
     {reply, Reply, State};
 handle_call(_Request, _From, State) ->
     Reply = ok,
@@ -130,7 +133,7 @@ handle_call(_Request, _From, State) ->
 
 handle_cast({announce, Peer}, State) ->
 	F = process_announce(Peer),
-    mnesia:activity(sync_dirty, F),
+    mnesia:activity(ets, F),
 	{noreply, State};
 handle_cast(stop, State) ->
     {stop, normal, State};
@@ -170,13 +173,13 @@ process_expire_torrent_peers(ExpireTime) ->
                                      [Id|Us]
                                     }
                             end, {orddict:new(), []}, Res),
-            lists:foreach(fun (Id) -> mnesia:delete({torrent_user, Id}) end, Users),
+            lists:foreach(fun (Id) -> mnesia:dirty_delete({torrent_user, Id}) end, Users),
             orddict:fold(fun (InfoHash, {Seeders, Leechers}, Acc) ->
-                                 case mnesia:read({torrent_info, InfoHash}) of
+                                 case mnesia:dirty_read({torrent_info, InfoHash}) of
                                      [] ->
                                          ok;
                                      [TI=#torrent_info{seeders=S, leechers=L}] ->
-                                         mnesia:write(TI#torrent_info{
+                                         mnesia:dirty_write(TI#torrent_info{
                                                         seeders=max(0, S - Seeders),
                                                         leechers=max(0, L - Leechers)
                                                        })
@@ -192,7 +195,7 @@ process_torrent_infos([], Callback) ->
     process_torrent_infos1(mnesia:select(torrent_info, Q, ?QUERY_CHUNK_SIZE, read), Callback);
 process_torrent_infos(IHs, Callback) ->
     Data = lists:foldl(fun (IH, Acc) ->
-                               case mnesia:read({torrent_info, IH}) of
+                               case mnesia:dirty_read({torrent_info, IH}) of
                                    [] ->
                                        Acc;
                                    [TI] ->
@@ -208,7 +211,7 @@ process_torrent_infos1('$end_of_table', _Callback) ->
     ok.
 
 process_torrent_peers(InfoHash, Wanted) ->
-    case mnesia:read({torrent_info, InfoHash}) of
+    case mnesia:dirty_read({torrent_info, InfoHash}) of
         [] ->
             [];
         [#torrent_info{seeders=S, leechers=L}] ->
@@ -239,7 +242,7 @@ process_torrent_peers(PeerType, InfoHash, Wanted, Available) ->
         end,
     Available1 = max(Wanted, Available),
     if Available1 =< Wanted ->
-            mnesia:select(torrent_user, Query);
+            mnesia:dirty_select(torrent_user, Query);
        true ->
             Offset = random:uniform(Available1 - Wanted),
             Cursor = mnesia:select(torrent_user, Query, Wanted, read),
@@ -278,7 +281,7 @@ process_announce(#announce{event = <<"started">>, left=Left, info_hash=InfoHash}
                 end,
 
             {AddSeeders1, AddLeechers1} =
-                case mnesia:read({torrent_user, TID}) of
+                case mnesia:dirty_read({torrent_user, TID}) of
                     %% duplicated event
                     [#torrent_user{event=Event, left=OldLeft}] ->
                         if OldLeft == Left ->
@@ -293,25 +296,25 @@ process_announce(#announce{event = <<"started">>, left=Left, info_hash=InfoHash}
                     _ -> {AddSeeders, AddLeechers}
                 end,
 
-            case mnesia:read({torrent_info, InfoHash}) of
-                [] -> mnesia:write(#torrent_info{
+            case mnesia:dirty_read({torrent_info, InfoHash}) of
+                [] -> mnesia:dirty_write(#torrent_info{
                                       seeders=AddSeeders1,
                                       leechers=AddLeechers1,
                                       info_hash=InfoHash
                                      });
                 [T=#torrent_info{seeders=S, leechers=L}] ->
-                    mnesia:write(T#torrent_info{
+                    mnesia:dirty_write(T#torrent_info{
                                    seeders=max(S+AddSeeders1, 0),
                                    leechers=max(L+AddLeechers1, 0),
                                    mtime=erlang:now()})
             end,
-            mnesia:write(TorrentUser#torrent_user{finished = Left == 0})
+            mnesia:dirty_write(TorrentUser#torrent_user{finished = Left == 0})
 	end;
 process_announce(#announce{event = <<"stopped">>, info_hash=InfoHash},
                  _TU=#torrent_user{id=TID}) ->
 	fun() ->
             {SubSeeders, SubLeechers} =
-                case mnesia:read({torrent_user, TID}) of
+                case mnesia:dirty_read({torrent_user, TID}) of
                     [] -> {0, 0};
                     [#torrent_user{finished=F}] ->
                         mnesia:delete({torrent_user, TID}),
@@ -321,10 +324,10 @@ process_announce(#announce{event = <<"stopped">>, info_hash=InfoHash},
                                 {0, 1}
                         end
                 end,
-            case mnesia:read({torrent_info, InfoHash}) of
-                [] -> mnesia:write(#torrent_info{info_hash = InfoHash});
+            case mnesia:dirty_read({torrent_info, InfoHash}) of
+                [] -> mnesia:dirty_write(#torrent_info{info_hash = InfoHash});
                 [T=#torrent_info{seeders=S, leechers=L}] ->
-                    mnesia:write(T#torrent_info{
+                    mnesia:dirty_write(T#torrent_info{
                                    seeders=max(S - SubSeeders, 0),
                                    leechers=max(L - SubLeechers, 0),
                                    mtime=erlang:now()
@@ -336,27 +339,27 @@ process_announce(#announce{event = <<"completed">>, info_hash=InfoHash},
                  TorrentUser=#torrent_user{id=TID, event=Event}) ->
 	fun() ->
             {AddSeeders, AddLeechers} =
-                case mnesia:read({torrent_user, TID}) of
+                case mnesia:dirty_read({torrent_user, TID}) of
                     [#torrent_user{event=E, finished = F}] when E == Event
                                                                 orelse F == true ->
                         {0, 0}; % duplicated event or seeder was already counted
                     _ ->
                         {1, -1}
                 end,
-            case mnesia:read({torrent_info, InfoHash}) of
-                [] -> mnesia:write(#torrent_info{
+            case mnesia:dirty_read({torrent_info, InfoHash}) of
+                [] -> mnesia:dirty_write(#torrent_info{
                                       info_hash = InfoHash,
                                       seeders=1, completed=1
                                      });
                 [T=#torrent_info{seeders=S, leechers=L, completed=C}] ->
-                    mnesia:write(T#torrent_info{
+                    mnesia:dirty_write(T#torrent_info{
                                    leechers=max(L + AddLeechers, 0),
                                    seeders=S + AddSeeders,
                                    completed=C + AddSeeders,
                                    mtime=erlang:now()
                                   })
             end,
-            mnesia:write(TorrentUser#torrent_user{finished = true})
+            mnesia:dirty_write(TorrentUser#torrent_user{finished = true})
 	end;
 %% Peer is making periodic announce
 process_announce(#announce{left=Left, info_hash=InfoHash}, TU=#torrent_user{id=TID}) ->
@@ -365,8 +368,8 @@ process_announce(#announce{left=Left, info_hash=InfoHash}, TU=#torrent_user{id=T
                 if Left == 0 -> {1, 0}; % is seeder
                    true -> {0, 1} % is leecher
                 end,
-            case mnesia:read({torrent_info, InfoHash}) of
-                [] -> mnesia:write(#torrent_info{
+            case mnesia:dirty_read({torrent_info, InfoHash}) of
+                [] -> mnesia:dirty_write(#torrent_info{
                                       info_hash = InfoHash,
                                       seeders=Seeders,
                                       leechers=Leechers
@@ -374,22 +377,9 @@ process_announce(#announce{left=Left, info_hash=InfoHash}, TU=#torrent_user{id=T
                 _ ->
                     ok
             end,
-            case mnesia:read({torrent_user, TID}) of
-                [] -> mnesia:write(TU#torrent_user{finished= Left == 0});
+            case mnesia:dirty_read({torrent_user, TID}) of
+                [] -> mnesia:dirty_write(TU#torrent_user{finished= Left == 0});
                 [#torrent_user{event=Evt, finished=F}] ->
-                    mnesia:write(TU#torrent_user{event=Evt, finished=F, mtime=erlang:now()})
+                    mnesia:dirty_write(TU#torrent_user{event=Evt, finished=F, mtime=erlang:now()})
             end
 	end.
-
-seek_cursor(_C, Offset) when Offset == 0 ->
-    ok;
-seek_cursor(C, Offset) when Offset =< 100 ->
-    qlc:next_answers(C, Offset),
-    ok;
-seek_cursor(C, Offset) ->
-    Len = length(qlc:next_answers(C, 100)),
-    if (Len < 100) ->
-            ok;
-       true ->
-            seek_cursor(C, Offset - Len)
-    end.

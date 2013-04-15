@@ -8,11 +8,13 @@
 %%%-------------------------------------------------------------------
 -module(etracker_cleaner).
 
--export([start_link/0, init/2]).
+-export([start_link/0, init/2, stop/0]).
 -export([force_clean/1]).
 -export([system_code_change/4, system_continue/3, system_terminate/4, write_debug/3]).
 
 -include("etracker.hrl").
+
+-define(SERVER, ?MODULE).
 
 -record(state, {
           clean_interval=0,
@@ -33,8 +35,12 @@ start_link() ->
     CleanInterval = confval(clean_interval, Default),
     proc_lib:start_link(?MODULE, init, [self(), #state{clean_interval=CleanInterval * 1000}]).
 
+stop() ->
+    ?SERVER ! stop,
+    ok.
+
 init(Parent, State=#state{clean_interval=CleanInterval}) ->
-    register(?MODULE, self()),
+    register(?SERVER, self()),
     Debug = sys:debug_options([]),
     proc_lib:init_ack(Parent, {ok, self()}),
     ExpireTime = now(),
@@ -54,6 +60,9 @@ loop(Parent, Debug, State=#state{tref=TRef}) ->
         {clean, ExpireTime} ->
             NxtState= do_clean(ExpireTime, State),
             loop(Parent, Debug, NxtState);
+        stop ->
+            timer:cancel(TRef),
+            ok;
         Msg ->
             % Let's print unknown messages.
             sys:handle_debug(

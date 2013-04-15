@@ -44,7 +44,7 @@ start_link() ->
       ],
       []
      },
-    {PoolOpts, WorkerArgs} = confval(db, DefaultOpts),
+    {PoolOpts, WorkerArgs} = confval(db_pool, DefaultOpts),
     PoolArgs = [{name, {local, ?SERVER}}|PoolOpts],
     poolboy:start_link(PoolArgs, WorkerArgs).
 

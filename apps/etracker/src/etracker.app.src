@@ -11,6 +11,7 @@
              etracker_db,
              etracker_db_cache,
              etracker_mnesia,
+             etracker_mnesia_mgr,
              etracker_cleaner,
              etracker_http_srv,
              etracker_http_static,

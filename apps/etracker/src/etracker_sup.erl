@@ -24,9 +24,10 @@ start_link() ->
 %% ===================================================================
 
 init([]) ->
-    DbSrv = ?CHILD(etracker_db, worker),
+    DbMgr = ?CHILD(etracker_db_mgr, worker),
+    DbPool = ?CHILD(etracker_db, worker),
     DbCache = ?CHILD(etracker_db_cache, worker),
     HttpSrv = ?CHILD(etracker_http_srv, worker),
     EventMgr = ?CHILD(etracker_event, worker),
     Cleaner = ?CHILD(etracker_cleaner, worker),
-    {ok, {{one_for_one, 5, 10}, [EventMgr, DbSrv, DbCache, HttpSrv, Cleaner]}}.
+    {ok, {{one_for_one, 5, 10}, [EventMgr, DbMgr, DbPool, DbCache, HttpSrv, Cleaner]}}.
