@@ -7,9 +7,12 @@
 
 -module(etracker_env).
 
--export([get/2, set/2]).
+-export([get/1, get/2, set/2]).
 
 -define(APP, etracker).
+
+get(Key) ->
+    application:get_env(?APP, Key).
 
 get(Key, Default) ->
     case application:get_env(?APP, Key) of

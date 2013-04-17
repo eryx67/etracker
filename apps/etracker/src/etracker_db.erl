@@ -11,8 +11,9 @@
 %% API
 -export([start_link/0, stop/0]).
 -export([system_info/0, system_info/1, system_info_update_counter/2]).
--export([announce/1, torrent_info/1, torrent_infos/1, torrent_peers/2]).
+-export([announce/1, torrent_info/1, torrent_infos/2, torrent_peers/2]).
 -export([expire_torrent_peers/1]).
+-export([db_call/1, db_call/2, db_cast/1]).
 
 -define(SERVER, ?MODULE).
 -define(INFO_TBL, etracker_info).
@@ -78,8 +79,8 @@ expire_torrent_peers(ExpireTime) ->
 torrent_info(InfoHash) when is_binary(InfoHash) ->
 	db_call({torrent_info, InfoHash}).
 
-torrent_infos(InfoHashes) when is_list(InfoHashes) ->
-	db_call({torrent_infos, InfoHashes, self()}).
+torrent_infos(InfoHashes, Callback) when is_list(InfoHashes) ->
+	db_call({torrent_infos, InfoHashes, Callback}).
 
 system_info() ->
     [{K, system_info(K)} || K <- ?INFO_DB_KEYS] ++ ets:tab2list(?INFO_TBL).

@@ -41,6 +41,7 @@ cleaner_test_start1() ->
     SeederMtime = Mtime = {Mega, Sec, Micro},
     Seeder = #torrent_user{
                 id={InfoHash, PeerId1},
+                peer={{127, 0, 0, 1}, 6969},
                 info_hash=InfoHash,
                 finished=true,
                 mtime=SeederMtime
@@ -48,22 +49,21 @@ cleaner_test_start1() ->
     LeecherMtime = {Mega, Sec + 10, Micro},
     Leecher = #torrent_user{
                  id={InfoHash, PeerId2},
+                 peer={{127, 0, 0, 1}, 6969},
                  info_hash=InfoHash,
                  finished=false,
                  mtime=LeecherMtime
                 },
-    mnesia:activity(sync_dirty, fun () ->
-                                        ok = mnesia:write(TI),
-                                        ok = mnesia:write(Seeder),
-                                        ok = mnesia:write(Leecher)
-                                end),
+    ok = write_record(TI),
+    ok = write_record(Seeder),
+    ok = write_record(Leecher),
     [TI, [Seeder, Leecher]].
 
 cleaner_test_stop([TI, TUs]) ->
     application:set_env(etracker, clean_interval, 2700),
-    mnesia:dirty_delete_object(TI),
+    delete_record(TI),
     lists:foreach(fun (TU) ->
-                          mnesia:dirty_delete_object(TU)
+                          delete_record(TU)
                   end, TUs),
     etracker:stop().
 
@@ -250,7 +250,7 @@ leecher_first_completed(Ann) ->
     [GenF1(Resp1, Checks1), GenF1(Resp2, Checks1), GenF2(Resp3, Checks2), GenF1(Resp4, Checks3), GenF1(Resp5, Checks3)].
 
 leecher_second_started(Ann) ->
-    [_Ih, PeerId, Port] = [orddict:fetch(K, Ann) || K <- [info_hash, peer_id, port]],
+    [IH, PeerId, Port] = [orddict:fetch(K, Ann) || K <- [info_hash, peer_id, port]],
     PeerId1 = random_string(20),
     ets:insert(?PEERS, {leecher_second, PeerId1, Port}),
     Ann1 = lists:foldl(fun ({K, V}, D) -> orddict:store(K, V, D) end,
@@ -258,11 +258,12 @@ leecher_second_started(Ann) ->
     {ok, Resp1} = send_announce(orddict:to_list(Ann1)),
     {ok, Resp2} = send_announce(orddict:to_list(Ann1)),
 
+    ?debugVal(etracker_db:torrent_peers(IH, 50)),
     GenF = fun (R) ->
                    Peers = proplists:get_value(<<"peers">>, R),
                    [
-                    ?_assertEqual(proplists:get_value(<<"incomplete">>, R), 2),
-                    ?_assertEqual(proplists:get_value(<<"complete">>, R), 0),
+                    ?_assertEqual(2, proplists:get_value(<<"incomplete">>, R)),
+                    ?_assertEqual(0, proplists:get_value(<<"complete">>, R)),
                     ?_assertMatch([_], Peers),
                     [?_assertEqual(proplists:get_value(K, lists:nth(1, Peers)), V)
                      || {K, V} <- [{<<"ip">>,<<"127.0.0.1">>},
@@ -324,7 +325,7 @@ seeder_first_started(Ann) ->
 scrape_all(_Ann) ->
     {ok, Resp} = send_scrape([]),
     Keys = lists:sort([K || {K, _} <- Resp]),
-    IHs = mnesia:activity(transaction, fun () -> mnesia:all_keys(torrent_info) end),
+    IHs = all_torrent_info_hashes(),
     Files = proplists:get_value(<<"files">>, Resp, []),
     Flags = lists:sort([K || {K, _} <- proplists:get_value(<<"flags">>, Resp, [])]),
     Info = proplists:get_value(lists:nth(1, IHs), Files),
@@ -340,7 +341,7 @@ scrape_all(_Ann) ->
     [GenF(Resp)].
 
 scrape_some(_Ann) ->
-    IHs = mnesia:activity(transaction, fun () -> mnesia:all_keys(torrent_info) end),
+    IHs = all_torrent_info_hashes(),
     IH1 = lists:nth(random:uniform(length(IHs)), IHs),
     IH2 = lists:nth(random:uniform(length(IHs)), IHs),
     ReqIHs = lists:sort([IH1, IH2]),
@@ -450,3 +451,35 @@ decode_compact_peers(<<>>, Acc) ->
     Acc;
 decode_compact_peers(<<I1:8,I2:8,I3:8,I4:8,Port:16,Rest/binary>>, Acc) ->
     decode_compact_peers(Rest, [[{<<"ip">>, {I1, I2, I3, I4}}, {<<"port">>, Port}] | Acc]).
+
+all_torrent_info_hashes() ->
+    {ok, {WorkerArgs, _}} = etracker_env:get(db_pool),
+    Mod = proplists:get_value(worker_module, WorkerArgs),
+    case Mod of
+        etracker_mnesia ->
+            mnesia:activity(transaction, fun () -> mnesia:all_keys(torrent_info) end);
+        etracker_pgsql ->
+            Q = "select info_hash from torrent_info",
+            {ok, _C, Rows} = etracker_db:db_call({equery, Q, []}),
+            [IH || {IH} <- Rows]
+    end.
+
+write_record(Rec) ->
+    {ok, {WorkerArgs, _}} = etracker_env:get(db_pool),
+    Mod = proplists:get_value(worker_module, WorkerArgs),
+    case Mod of
+        etracker_mnesia ->
+            mnesia:activity(transaction, fun () -> mnesia:write(Rec) end);
+        etracker_pgsql ->
+            ok = etracker_db:db_call({write, Rec})
+    end.
+
+delete_record(Rec) ->
+    {ok, {WorkerArgs, _}} = etracker_env:get(db_pool),
+    Mod = proplists:get_value(worker_module, WorkerArgs),
+    case Mod of
+        etracker_mnesia ->
+            mnesia:activity(transaction, fun () -> mnesia:delete_object(Rec) end);
+        etracker_pgsql ->
+            etracker_db:db_call({delete, Rec})
+    end.

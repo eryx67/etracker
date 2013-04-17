@@ -53,15 +53,25 @@ create_tables(Nodes, Tables) ->
 create_table(torrent_info, Nodes) ->
     mnesia:create_table(torrent_info, [
                                        {type, set},
+                                       {local_content, true},
                                        {attributes, record_info(fields, torrent_info)},
-                                       {ram_copies, Nodes}
+                                       {ram_copies, Nodes},
+                                       {storage_properties,
+                                        [{ets, [{read_concurrency, true},
+                                                {write_concurrency, true}]}]
+                                       }
                                       ]);
 create_table(torrent_user, Nodes) ->
     mnesia:create_table(torrent_user, [
                                        {type, set},
+                                       {local_content, true},
                                        {attributes, record_info(fields, torrent_user)},
                                        {index, [info_hash, mtime]},
-                                       {ram_copies, Nodes}
+                                       {ram_copies, Nodes},
+                                       {storage_properties,
+                                        [{ets, [{read_concurrency, true},
+                                                {write_concurrency, true}]}]
+                                       }
                                       ]),
     mnesia:add_table_index(torrent_user, info_hash),
     mnesia:add_table_index(torrent_user, mtime).
@@ -88,14 +98,12 @@ handle_call({torrent_info, InfoHash}, _From, State) when is_binary(InfoHash) ->
 		[TI] ->
 			{reply, TI, State}
 	end;
-handle_call({torrent_infos, InfoHashes, _Pid}, _From, State) when is_list(InfoHashes) ->
-    Fun = fun (Callback) ->
-                  mnesia:activity(ets,
-                                  fun () ->
-                                          process_torrent_infos(InfoHashes, Callback)
-                                  end)
-          end,
-    {reply, Fun, State};
+handle_call({torrent_infos, InfoHashes, Callback}, _From, State) when is_list(InfoHashes) ->
+    mnesia:activity(ets,
+                    fun () ->
+                            process_torrent_infos(InfoHashes, Callback)
+                    end),
+    {reply, ok, State};
 handle_call({torrent_peers, InfoHash, Wanted}, _From, State) ->
     F = fun () ->
                 process_torrent_peers(InfoHash, Wanted)
@@ -192,7 +200,8 @@ process_expire_torrent_peers(ExpireTime) ->
 
 process_torrent_infos([], Callback) ->
     Q = ets:fun2ms(fun(TI) -> TI end),
-    process_torrent_infos1(mnesia:select(torrent_info, Q, ?QUERY_CHUNK_SIZE, read), Callback);
+    process_torrent_infos1(mnesia:select(torrent_info, Q, ?QUERY_CHUNK_SIZE, read),
+                           Callback);
 process_torrent_infos(IHs, Callback) ->
     Data = lists:foldl(fun (IH, Acc) ->
                                case mnesia:dirty_read({torrent_info, IH}) of

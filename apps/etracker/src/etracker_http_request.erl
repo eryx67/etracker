@@ -116,8 +116,7 @@ scrape_request_reply(Req, Params) ->
                                  Data = scrape_pack_torrent_infos(TorrentInfos),
                                  ok = cowboy_http_req:chunk(Data, Req2)
                          end,
-            CursorFn = etracker_db:torrent_infos(IHs),
-            CursorFn(ResultsFun),
+            ok = etracker_db:torrent_infos(IHs, ResultsFun),
             CloseData = ["e",
                          etorrent_bcoding:encode(<<"flags">>),
                          etorrent_bcoding:encode([{<<"min_request_interval">>, SRI}]),
