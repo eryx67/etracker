@@ -233,22 +233,22 @@ dump_tables() ->
                   end, ?PERSISTENT_TABLES).
 
 open_table(TN=torrent_info, DataDir) ->
-    Type = set,
+    Type = ordered_set,
     TblOpts = [{keypos, #torrent_info.info_hash}],
     EtsOpts = [Type|TblOpts] ++ [public, named_table,
                                  {write_concurrency, true}, {read_concurrency, true}
                                 ],
     ets:new(TN, EtsOpts),
-    ok = open_dets(TN, [{type, Type}|TblOpts], DataDir),
+    ok = open_dets(TN, [{type, set}|TblOpts], DataDir),
     true = ets:from_dets(TN, TN);
 open_table(TN=torrent_user, DataDir) ->
-    Type = set,
+    Type = ordered_set,
     TblOpts = [{keypos, #torrent_user.id}],
     EtsOpts = [Type|TblOpts] ++ [public, named_table,
                                  {write_concurrency, true}, {read_concurrency, true}
                                 ],
     ets:new(TN, EtsOpts),
-    ok = open_dets(TN, [{type, Type}|TblOpts], DataDir),
+    ok = open_dets(TN, [{type, set}|TblOpts], DataDir),
     true = ets:from_dets(TN, TN);
 open_table(TN, _DataDir) when TN == torrent_seeder
                               orelse TN == torrent_leecher ->

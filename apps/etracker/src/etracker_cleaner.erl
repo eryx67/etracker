@@ -44,7 +44,10 @@ init(Parent, State=#state{clean_interval=CleanInterval}) ->
     Debug = sys:debug_options([]),
     proc_lib:init_ack(Parent, {ok, self()}),
     ExpireTime = now(),
-    {ok, TRef} = timer:send_after(CleanInterval, {clean, ExpireTime}),
+    ExpDT = calendar:now_to_local_time(ExpireTime),
+    Self = self(),
+    lager:info("~s will start in ~w ms, next expire time ~p", [?MODULE, CleanInterval, ExpDT]),
+    TRef = erlang:send_after(CleanInterval, Self, {clean, ExpireTime}),
     loop(Parent, Debug, State#state{tref=TRef, expire_time=ExpireTime}).
 
 loop(Parent, Debug, State=#state{tref=TRef}) ->
@@ -54,14 +57,14 @@ loop(Parent, Debug, State=#state{tref=TRef}) ->
                 Request, From, Parent, ?MODULE, Debug, State
             );
         {force_clean, ExpireTime} ->
-            timer:cancel(TRef),
+            erlang:cancel_timer(TRef),
             NxtState= do_clean(ExpireTime, State),
             loop(Parent, Debug, NxtState);
         {clean, ExpireTime} ->
             NxtState= do_clean(ExpireTime, State),
             loop(Parent, Debug, NxtState);
         stop ->
-            timer:cancel(TRef),
+            erlang:cancel_timer(TRef),
             ok;
         Msg ->
             % Let's print unknown messages.
@@ -73,10 +76,14 @@ loop(Parent, Debug, State=#state{tref=TRef}) ->
 
 do_clean(ExpireTime, State=#state{clean_interval=CleanInterval}) ->
     NxtExpireTime = now(),
+    NxtExpDT = calendar:now_to_local_time(NxtExpireTime),
+    lager:info("~s started, next cleanup in ~w ms, next expire time ~p",
+               [?MODULE, CleanInterval, NxtExpDT]),
     Cnt = etracker_db:expire_torrent_peers(ExpireTime),
     etracker_event:cleanup_completed(Cnt),
-    lager:info("~s cleanup completed, deleted ~w~n", [?MODULE, Cnt]),
-    {ok, TRef} = timer:send_after(CleanInterval, {clean, NxtExpireTime}),
+    lager:info("~s cleanup completed, deleted ~w", [?MODULE, Cnt]),
+    Self = self(),
+    TRef = erlang:send_after(CleanInterval, Self, {clean, NxtExpireTime}),
     State#state{tref=TRef, expire_time=NxtExpireTime}.
 
 write_debug(Dev, Event, Name) ->
