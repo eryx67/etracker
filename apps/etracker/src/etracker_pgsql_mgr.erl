@@ -8,7 +8,8 @@
 %%%-------------------------------------------------------------------
 -module(etracker_pgsql_mgr).
 
--export([start_link/1, init/2]).
+-export([start_link/1, stop/1]).
+-export([init/2]).
 -export([system_code_change/4, system_continue/3, system_terminate/4, write_debug/3]).
 
 -include("etracker.hrl").
@@ -23,6 +24,9 @@ init(Parent, State) ->
     Debug = sys:debug_options([]),
     proc_lib:init_ack(Parent, {ok, self()}),
     loop(Parent, Debug, State).
+
+stop(Pid) ->
+    Pid ! stop.
 
 loop(Parent, Debug, State) ->
     receive

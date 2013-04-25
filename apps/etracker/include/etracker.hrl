@@ -1,5 +1,15 @@
 -define(ANNOUNCE_ANSWER_INTERVAL, 60 * 30).
 -define(ANNOUNCE_ANSWER_MAX_PEERS, 50).
+-define(INFOHASH_MAX, << 16#ff, 16#ff, 16#ff, 16#ff, 16#ff,
+                         16#ff, 16#ff, 16#ff, 16#ff, 16#ff,
+                         16#ff, 16#ff, 16#ff, 16#ff, 16#ff,
+                         16#ff, 16#ff, 16#ff, 16#ff, 16#ff >>).
+-define(INFOHASH_MIN, << 16#00, 16#00, 16#00, 16#00, 16#00,
+                         16#00, 16#00, 16#00, 16#00, 16#00,
+                         16#00, 16#00, 16#00, 16#00, 16#00,
+                         16#00, 16#00, 16#00, 16#00, 16#00 >>).
+
+-define(INFOHASH_LENGTH, 20).
 
 -record(announce, {
           info_hash, %% urlencoded 20-byte SHA1 hash of the value of the info key from the Metainfo file
@@ -35,11 +45,15 @@
 -record(torrent_user, {
           id = {undefined, undefined},   % {info_hash, peer_id}
           peer = {undefined, undefined}, % {address, port}
-          info_hash,
           event,
           downloaded = 0,
           uploaded = 0,
           left = 0,
           finished = false, % client sent <<completed>> or connected as seeder
           mtime = erlang:now()
+         }).
+
+-record(torrent_peer, {
+          id = {undefined, undefined},   % {info_hash, peer_id}
+          peer = {undefined, undefined}  % {address, port}
          }).

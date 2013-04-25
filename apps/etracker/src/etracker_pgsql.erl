@@ -11,7 +11,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/1]).
+-export([start_link/1, stop/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -21,6 +21,7 @@
 
 -define(SERVER, ?MODULE).
 -define(QUERY_CHUNK_SIZE, 1000).
+-define(TORRENT_INFO_LIMIT, 10000).
 
 -record(state, {
           connection,
@@ -29,6 +30,9 @@
 
 start_link(Opts) ->
     gen_server:start_link(?MODULE, Opts, []).
+
+stop(Pid) ->
+    gen_server:cast(Pid, stop).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -41,10 +45,14 @@ init(Opts) ->
     Username = proplists:get_value(username, Opts),
     Password = proplists:get_value(password, Opts),
     Timeout = proplists:get_value(timeout, Opts, 5000),
+    Port = proplists:get_value(port, Opts, 5432),
     {ok, Conn} = pgsql:connect(Hostname, Username, Password,
-                               [{database, Database}, {timeout, Timeout}]),
+                               [{port, Port}, {database, Database}, {timeout, Timeout}]),
     {ok, setup(#state{connection=Conn})}.
 
+handle_call({announce, Peer}, _From, State) ->
+	ok = process_announce(Peer, State),
+	{reply, ok, State};
 handle_call({torrent_info, InfoHash}, _From, State) when is_binary(InfoHash) ->
     {reply, read_torrent_info(InfoHash, State), State};
 handle_call({torrent_infos, [], Callback}, _From, State) ->
@@ -90,7 +98,8 @@ handle_call({write, _TI=#torrent_info{
     MT = now_to_timestamp(now()),
     Args = [InfoHash, Completed, Seeders, Leechers, MT],
     case exec_statement(C, update_torrent_info, Args, Ss) of
-        {ok, 0} -> exec_statement(C, insert_torrent_info, Args, Ss);
+        {ok, 0} ->
+            exec_statement(C, insert_torrent_info, Args, Ss);
         {ok, 1} ->
             ok
     end,
@@ -108,12 +117,11 @@ handle_call({write, _TU=#torrent_user{id={IH, PeerId},
     Args = [IH, PeerId, address_from_erl(Address), Port, U, D, L, Evt, F, MT],
     case exec_statement(C, update_peer, Args, Ss) of
         {ok, 0} ->
-            {ok ,1} = exec_statement(C, insert_peer, Args, Ss);
+            exec_statement(C, insert_peer, Args, Ss);
         {ok, 1} ->
             ok
     end,
     {reply, ok, S};
-
 handle_call({delete, _TI=#torrent_info{info_hash=InfoHash}},
             _From, S=#state{connection=C, statements=Ss}) ->
     {ok, Cnt} = exec_statement(C, delete_torrent_info, [InfoHash], Ss),
@@ -122,15 +130,15 @@ handle_call({delete, _TU=#torrent_user{id={IH, PeerId}}},
             _From, S=#state{connection=C, statements=Ss}) ->
     {ok, Cnt} = exec_statement(C, delete_peer, [IH, PeerId], Ss),
     {reply, Cnt, S};
+handle_call({fold, Table, Acc, Callback}, _From, State) ->
+    Ret = fold_table(Table, Acc, Callback, State),
+    {reply, Ret, State};
 handle_call(_Request, _From, State) ->
-    Reply = ok,
+    Reply = {error, invalid_request},
     {reply, Reply, State}.
 
-handle_cast({announce, Peer}, State) ->
-	ok = process_announce(Peer, State),
-	{noreply, State};
 handle_cast(stop, State) ->
-    {stop, normal, State};
+    {stop, shutdown, State};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -151,7 +159,7 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-setup(State=#state{connection=C, statements=Ss}) ->
+setup(State=#state{connection=_C, statements=Ss}) ->
     RowToTorrentInfoF = fun ({InfoHash, Leechers, Seeders, Completed, Name, Mtime, Ctime}) ->
                              #torrent_info{
                               info_hash=InfoHash,
@@ -159,14 +167,31 @@ setup(State=#state{connection=C, statements=Ss}) ->
                               seeders=Seeders,
                               completed=Completed,
                               name=Name,
-                              mtime=Mtime,
-                              ctime=Ctime
+                              mtime=timestamp_to_now(Mtime),
+                              ctime=timestamp_to_now(Ctime)
                              }
+                        end,
+    RowToTorrentUserF = fun ({InfoHash, PeerId, Address, Port,
+                              Uploaded, Downloaded, Left, Event,
+                              Finished, Mtime}) ->
+                                #torrent_user{
+                                   id={InfoHash,PeerId},
+                                   peer={address_to_erl(Address), Port},
+                                   uploaded=Uploaded,
+                                   downloaded=Downloaded,
+                                   left=Left,
+                                   event=Event,
+                                   finished=Finished,
+                                   mtime=timestamp_to_now(Mtime)
+                                  }
                         end,
     TorrentInfoF = fun ([Row], _Cnt) ->
                            RowToTorrentInfoF(Row);
                        ([], 0) ->
                            undefined
+                   end,
+    TorrentUsersF = fun (Rows, _Cnt) ->
+                           [RowToTorrentUserF(Row) || Row <- Rows]
                    end,
     TorrentInfosF = fun (Rows, _Cnt) ->
                            [RowToTorrentInfoF(Row) || Row <- Rows]
@@ -187,31 +212,33 @@ setup(State=#state{connection=C, statements=Ss}) ->
          },
          {torrent_infos_all,
           "select info_hash, leechers, seeders, completed, name, mtime, ctime"
-          " from torrent_info order by mtime desc",
-          [],
+          " from torrent_info order by mtime desc limit $1",
+          [int4],
           TorrentInfosF
          },
          {torrent_peers_seeders_count,
          "select count(*) from torrent_user"
-          " where info_hash = $1 and finished = true",
+          " where info_hash = $1 and finished = true and event != 'stopped'",
           [bytea],
           CountF
          },
          {torrent_peers_leechers_count,
          "select count(*) from torrent_user"
-          " where info_hash = $1 and finished = false",
+          " where info_hash = $1 and finished = false and event != 'stopped'",
           [bytea],
           CountF
          },
          {torrent_peers_seeders,
-         "select peer_id, address, port from torrent_user "
-          " where info_hash = $1 and finished = true offset $2 limit $3",
+         "select peer_id, address, port from torrent_user"
+          " where info_hash = $1 and finished = true and event != 'stopped'"
+          " offset $2 limit $3",
           [bytea, int4, int4],
           TorrentPeersF
          },
          {torrent_peers_leechers,
-         "select peer_id, address, port from torrent_user "
-          "where info_hash = $1 and finished = false offset $2 limit $3",
+         "select peer_id, address, port from torrent_user"
+          " where info_hash = $1 and finished = false and event != 'stopped'"
+          " offset $2 limit $3",
           [bytea, int4, int4],
           TorrentPeersF
          },
@@ -221,8 +248,14 @@ setup(State=#state{connection=C, statements=Ss}) ->
           [bytea, int4, int4],
           fun (Cnt) -> Cnt end
          },
+         {peers_all,
+          "select info_hash, peer_id, address, port, uploaded, downloaded, left_bytes, event, finished, mtime"
+          " from torrent_user order by mtime desc limit $1",
+          [int4],
+          TorrentUsersF
+         },
          {delete_expired_peers,
-          "delete from torrent_user where mtime < $1",
+          "delete from torrent_user where mtime < $1 or event = 'stopped'",
           [timestamp],
           fun (Cnt) -> Cnt end
          },
@@ -297,12 +330,7 @@ setup(State=#state{connection=C, statements=Ss}) ->
          }
         ],
     Ss1 = lists:foldl(fun ({Name, Query, Types, ResFun}, Statements) ->
-                              case pgsql:parse(C, atom_to_list(Name), Query, Types) of
-                                  {ok, S} ->
-                                      orddict:store(Name, {S, ResFun}, Statements);
-                                  {error, Error} ->
-                                      exit({error, {Name, Error}})
-                              end
+                              orddict:store(Name, {Query, ResFun, Types}, Statements)
                       end, Ss, Queries),
     State#state{statements=Ss1}.
 
@@ -314,11 +342,11 @@ process_expire_torrent_peers(ExpireTime,#state{connection=C, statements=Ss}) ->
 process_torrent_peers(InfoHash, Wanted, State=#state{connection=C, statements=Ss}) ->
     {ok, SeedersCnt} = exec_statement(C, torrent_peers_seeders_count, [InfoHash], Ss),
     {ok, LeechersCnt} = exec_statement(C, torrent_peers_leechers_count, [InfoHash], Ss),
-    {ok, 1} = exec_statement(C, update_torrent_peers_counters,
+    {ok, _} = exec_statement(C, update_torrent_peers_counters,
                              [InfoHash, SeedersCnt, LeechersCnt], Ss),
     Seeders = read_torrent_seeders(InfoHash, SeedersCnt, Wanted, State),
     Leechers = read_torrent_leechers(InfoHash, LeechersCnt, max(0, Wanted - length(Seeders)), State),
-    Seeders ++ Leechers.
+    {SeedersCnt, LeechersCnt, Seeders ++ Leechers}.
 
 process_announce(_A=#announce{
                       event=Evt,
@@ -328,7 +356,8 @@ process_announce(_A=#announce{
     Finished = Left == 0,
     case Evt of
         <<"stopped">> ->
-            delete_peer(InfoHash, PeerId, State);
+            %% delete_peer(InfoHash, PeerId, State);
+            write_peer(InfoHash, PeerId, IP, Port, Upl, Dld, Left, Evt, Finished, State);
         _ ->
             write_peer(InfoHash, PeerId, IP, Port, Upl, Dld, Left, Evt, Finished, State),
             write_torrent_info(InfoHash, Evt == <<"completed">>, Finished, State)
@@ -336,7 +365,7 @@ process_announce(_A=#announce{
     ok.
 
 process_torrent_infos_all(Callback, #state{connection=C, statements=Ss}) ->
-    case exec_statement(C, torrent_infos_all, [], Ss) of
+    case exec_statement(C, torrent_infos_all, [?TORRENT_INFO_LIMIT], Ss) of
         {ok, Rows} ->
             Callback(Rows),
             ok;
@@ -369,7 +398,7 @@ write_torrent_info(InfoHash, Completed, Finished,
                                   end,
             MT = now_to_timestamp(now()),
             Args = [InfoHash, AddCompleted, Seeders, Leechers, MT],
-            {ok, 1} = exec_statement(C, insert_torrent_info, Args, Ss),
+            exec_statement(C, insert_torrent_info, Args, Ss),
             ok;
         {ok, 1} ->
             ok
@@ -377,10 +406,10 @@ write_torrent_info(InfoHash, Completed, Finished,
 
 read_torrent_info(InfoHash, #state{connection=C, statements=Ss}) ->
     case exec_statement(C, torrent_info, [InfoHash], Ss) of
+        {ok, undefined} ->
+            #torrent_info{};
         {ok, TI} ->
-            TI;
-        undefined ->
-			#torrent_info{}
+            TI
 	end.
 
 read_torrent_seeders(_IH, _A, 0, _S) ->
@@ -407,7 +436,7 @@ read_torrent_leechers(InfoHash, Available, Wanted, #state{connection=C, statemen
                                    [InfoHash, Offset, Wanted], Ss),
     Leechers.
 
-delete_peer(InfoHash, PeerId,#state{connection=C, statements=Ss}) ->
+delete_peer(InfoHash, PeerId, #state{connection=C, statements=Ss}) ->
     exec_statement(C, delete_peer, [InfoHash, PeerId], Ss).
 
 write_peer(InfoHash, PeerId, IP, Port, Upl, Dld, Left, Event, Finished,
@@ -423,17 +452,49 @@ write_peer(InfoHash, PeerId, IP, Port, Upl, Dld, Left, Event, Finished,
             ok
     end.
 
-exec_statement(Conn, Name, Params, Statements) ->
-    exec_statement(Conn, Name, Params, 0, Statements).
+fold_table(Table, Acc, Callback, #state{connection=C, statements=Ss}) ->
+    QName = case Table of
+                torrent_info ->
+                    torrent_infos_all;
+                torrent_user ->
+                    peers_all
+            end,
+    fold_table(exec_parsed_statement(C, QName, [10000000000], Ss), Acc, Callback).
 
-exec_statement(Conn, Name, Params, MaxRows, Statements) ->
-    {S, ResFun} = orddict:fetch(Name, Statements),
+fold_table({ok, Rows}, Acc, Cb) ->
+    lists:foldl(Cb, Acc, Rows);
+fold_table({ok, Rows, Cont}, Acc, Cb) ->
+    Acc1 = lists:foldl(Cb, Acc, Rows),
+    fold_table(Cont(), Acc1, Cb).
+
+exec_statement(Conn, Name, Params, Statements) ->
+    {Query, ResFun, _T} = orddict:fetch(Name, Statements),
+    Res = pgsql:equery(Conn, Query, Params),
+    case Res of
+        {ok, _Col, Rows} ->
+            {ok, ResFun(Rows, length(Rows))};
+        {ok, Cnt, _Cols, Rows} ->
+            {ok, ResFun(Rows, Cnt)};
+        {ok, Cnt} ->
+            {ok, ResFun(Cnt)};
+        {error, Error} ->
+            {error, {Name, Error}}
+	end.
+
+exec_parsed_statement(Conn, Name, Params, Statements) ->
+    exec_parsed_statement(Conn, Name, Params, 0, Statements).
+
+exec_parsed_statement(Conn, Name, Params, MaxRows, Statements) ->
+    {Query, ResFun, Types} = orddict:fetch(Name, Statements),
+    SName = atom_to_list(Name),
+    {ok, S} = pgsql:parse(Conn, SName, Query, Types),
     ok = pgsql:bind(Conn, S, Params),
-    Ret = exec_statement_fetch(Conn, S, Name, MaxRows, ResFun),
-    ok = pgsql:sync(Conn),
+    Ret = exec_parsed_statement_fetch(Conn, S, Name, MaxRows, ResFun),
+    ok = pgsql:close(Conn, statement, SName),
+    pgsql:sync(Conn),
     Ret.
 
-exec_statement_fetch(Conn, Statement, Name, MaxRows, ResFun) ->
+exec_parsed_statement_fetch(Conn, Statement, Name, MaxRows, ResFun) ->
     Res = pgsql:execute(Conn, Statement, MaxRows),
     case Res of
         {ok, Cnt, Rows} ->
@@ -444,7 +505,7 @@ exec_statement_fetch(Conn, Statement, Name, MaxRows, ResFun) ->
             {ok, ResFun(Cnt)};
         {partitial, Rows} ->
             ContF = fun () ->
-                            exec_statement_fetch(Conn, Statement, Name, MaxRows, ResFun)
+                            exec_parsed_statement_fetch(Conn, Statement, Name, MaxRows, ResFun)
                     end,
 			{ok, ResFun(Rows, length(Rows)), ContF};
         {error, Error} ->
@@ -459,3 +520,9 @@ address_from_erl(Address) ->
 
 now_to_timestamp(Time) ->
     calendar:now_to_local_time(Time).
+
+timestamp_to_now({D, {HH, MM, SSMS}}) ->
+    SS = erlang:trunc(SSMS),
+    Seconds = calendar:datetime_to_gregorian_seconds({D, {HH, MM, SS}}) - 62167219200,
+    %% 62167219200 == calendar:datetime_to_gregorian_seconds({{1970, 1, 1}, {0, 0, 0}})
+    {Seconds div 1000000, Seconds rem 1000000, erlang:trunc((SSMS - SS) * 1000000)}.

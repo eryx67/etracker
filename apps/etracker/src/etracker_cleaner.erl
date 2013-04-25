@@ -75,7 +75,7 @@ do_clean(ExpireTime, State=#state{clean_interval=CleanInterval}) ->
     NxtExpireTime = now(),
     Cnt = etracker_db:expire_torrent_peers(ExpireTime),
     etracker_event:cleanup_completed(Cnt),
-    lager:info("~s cleanup completed", [?MODULE]),
+    lager:info("~s cleanup completed, deleted ~w~n", [?MODULE, Cnt]),
     {ok, TRef} = timer:send_after(CleanInterval, {clean, NxtExpireTime}),
     State#state{tref=TRef, expire_time=NxtExpireTime}.
 

@@ -63,11 +63,13 @@ typer:
 shell: deps compile
 	- mkdir -p $(CURDIR)/data
 	- @$(REBAR) skip_deps=true eunit
-	$(ERL) -name etracker@127.0.0.1 $(ERL_FLAGS) -boot start_sasl -config etracker.config
+	/usr/bin/env ERL_MAX_PORTS=128000 $(ERL) -name etracker@127.0.0.1 $(ERL_FLAGS) \
+	+K true +A 32 \
+	-boot start_sasl -config etracker.config
 
 etop:
-	erl -name etop@127.0.0.1 -hidden -s etop -s erlang halt -output text \
-		-node etracker@127.0.0.1 -setcookie etracker
+		erl -name etop@127.0.0.1 -hidden -s etop -s erlang halt -output text \
+		-node etracker@127.0.0.1 -setcookie etracker -tracing off
 
 pdf:
 	pandoc README.md -o README.pdf

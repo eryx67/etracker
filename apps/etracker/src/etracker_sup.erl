@@ -11,6 +11,7 @@
 
 %% Helper macro for declaring children of supervisor
 -define(CHILD(I, Type), {I, {I, start_link, []}, permanent, 5000, Type, [I]}).
+-define(CHILD_TIMEOUT(I, Type, Timeout), {I, {I, start_link, []}, permanent, Timeout, Type, [I]}).
 
 %% ===================================================================
 %% API functions
@@ -24,7 +25,7 @@ start_link() ->
 %% ===================================================================
 
 init([]) ->
-    DbMgr = ?CHILD(etracker_db_mgr, worker),
+    DbMgr = ?CHILD_TIMEOUT(etracker_db_mgr, worker, 300000),
     DbPool = ?CHILD(etracker_db, worker),
     DbCache = ?CHILD(etracker_db_cache, worker),
     HttpSrv = ?CHILD(etracker_http_srv, worker),

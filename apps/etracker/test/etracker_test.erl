@@ -1,6 +1,7 @@
 -module(etracker_test).
 
 -include_lib("eunit/include/eunit.hrl").
+-include_lib("stdlib/include/ms_transform.hrl").
 -include("etracker.hrl").
 
 -define(PEERS, test_peers).
@@ -42,7 +43,6 @@ cleaner_test_start1() ->
     Seeder = #torrent_user{
                 id={InfoHash, PeerId1},
                 peer={{127, 0, 0, 1}, 6969},
-                info_hash=InfoHash,
                 finished=true,
                 mtime=SeederMtime
                },
@@ -50,7 +50,6 @@ cleaner_test_start1() ->
     Leecher = #torrent_user{
                  id={InfoHash, PeerId2},
                  peer={{127, 0, 0, 1}, 6969},
-                 info_hash=InfoHash,
                  finished=false,
                  mtime=LeecherMtime
                 },
@@ -92,19 +91,27 @@ etracker_test_() ->
     }.
 
 etracker_cleaner_test_() ->
-    {setup,
-     fun cleaner_test_start/0,
-     fun cleaner_test_stop/1,
-     fun (SD) ->
-             {inorder,
-              [{timeout, 60,
-                [
-                 cleaner_checks(SD)
-                ]},
-               check_stats_after_clean()
-              ]}
-     end
-    }.
+    ok = application:load(etracker),
+    {ok, {WorkerArgs, _}} = etracker_env:get(db_pool),
+    Mod = proplists:get_value(worker_module, WorkerArgs),
+    case Mod of
+        etracker_mnesia ->
+            {setup,
+             fun cleaner_test_start/0,
+             fun cleaner_test_stop/1,
+             fun (SD) ->
+                     {inorder,
+                      [{timeout, 60,
+                        [
+                         cleaner_checks(SD)
+                        ]},
+                       check_stats_after_clean()
+                      ]}
+             end
+            };
+        _ ->
+            []
+    end.
 
 cleaner_checks([TI, TUs]) ->
     mnesia:subscribe({table, torrent_info, simple}),
@@ -461,7 +468,16 @@ all_torrent_info_hashes() ->
         etracker_pgsql ->
             Q = "select info_hash from torrent_info",
             {ok, _C, Rows} = etracker_db:db_call({equery, Q, []}),
-            [IH || {IH} <- Rows]
+            [IH || {IH} <- Rows];
+        etracker_ets ->
+            ets:select(torrent_info, ets:fun2ms(fun (#torrent_info{info_hash=IH}) ->
+                                                        IH
+                                                end));
+        etracker_hanoidb ->
+            etracker_db:torrent_infos([],
+                                      fun (TI) ->
+                                              [IH || #torrent_info{info_hash=IH} <- TI]
+                                      end)
     end.
 
 write_record(Rec) ->
@@ -470,7 +486,7 @@ write_record(Rec) ->
     case Mod of
         etracker_mnesia ->
             mnesia:activity(transaction, fun () -> mnesia:write(Rec) end);
-        etracker_pgsql ->
+        _ ->
             ok = etracker_db:db_call({write, Rec})
     end.
 
@@ -480,6 +496,6 @@ delete_record(Rec) ->
     case Mod of
         etracker_mnesia ->
             mnesia:activity(transaction, fun () -> mnesia:delete_object(Rec) end);
-        etracker_pgsql ->
+        _ ->
             etracker_db:db_call({delete, Rec})
     end.

@@ -126,13 +126,14 @@ scrape_request_reply(Req, Params) ->
             {ok, Req2}
     catch
         throw:Error ->
+            lager:error("invalid scrape, error ~w~n** Request was ~w~n", [Error, Req]),
             etracker_event:invalid_query({scrape, Error}),
             Body = etorrent_bcoding:encode([{<<"failure reason">>, Error}]),
             cowboy_http_req:reply(200, Headers, Body, Req);
         error:Error ->
             etracker_event:failed_query({scrape, Error}),
-            error_logger:error_msg("Error when parsing scrape ~w, backtrace ~p~n",
-                                   [Error,erlang:get_stacktrace()]),
+            lagger:error("Error when parsing scrape ~w, backtrace ~p~n",
+                         [Error,erlang:get_stacktrace()]),
             cowboy_http_req:reply(400, Headers, <<"Invalid request">>, Req)
     end.
 
@@ -158,11 +159,7 @@ announce_request_reply(Req, Params) ->
             NW1 = if NW == 0 orelse NW > MaxPeers -> MaxPeers;
                      true -> NW
                   end,
-            #torrent_info{
-               seeders = Complete,
-               leechers = Incomplete
-              } = etracker_db:torrent_info(IH),
-            Peers1 = etracker_db:torrent_peers(IH, MaxPeers + 1),
+            {Complete, Incomplete, Peers1} = etracker_db:torrent_peers(IH, MaxPeers + 1),
             Peers2 = [P || P <- Peers1, element(1, P) /= PI],
             Peers3 = lists:sublist(Peers2, NW1),
             Body = etorrent_bcoding:encode([
@@ -175,11 +172,12 @@ announce_request_reply(Req, Params) ->
             {Body, 200, Req1}
     catch
         throw:Error ->
+            lager:error("invalid announce, error ~w~n** Request was ~w~n", [Error, Req]),
             etracker_event:invalid_query({announce, Error}),
             {etorrent_bcoding:encode([{<<"failure reason">>, Error}]), 200, Req};
         error:Error ->
             etracker_event:failed_query({announce, Error}),
-            error_logger:error_msg("Error when parsing announce ~w~n** Request was ~w~n**Backtrace ~p~n",
+            lager:error("Error when parsing announce ~w~n** Request was ~w~n**Backtrace ~p~n",
                                    [Error, Req, erlang:get_stacktrace()]),
             {<<"Invalid request">>, 400, Req}
     end.
@@ -268,6 +266,9 @@ request_attr_default(Attr, Req) when Attr == uploaded
 request_attr_default(_Attr, Req) ->
     {undefined, Req}.
 
+request_attr_value(_Attr=ip, Val) when is_binary(Val) ->
+    {ok, IP} = inet_parse:address(binary_to_list(Val)),
+    IP;
 request_attr_value(_Attr=ip, Val) ->
     {ok, IP} = inet_parse:address(Val),
     IP;
@@ -293,7 +294,7 @@ request_attr_validate(Attr, _Val=undefined) when Attr == info_hash
     <<"required">>;
 request_attr_validate(Attr, Val) when (Attr == info_hash
                                        orelse Attr == peer_id)
-                                      andalso size(Val) /= 20 ->
+                                      andalso size(Val) /= ?INFOHASH_LENGTH ->
     <<"invalid value">>;
 request_attr_validate(_Attr=port, Val) when Val > 16#ffff ->
     <<"invalid value">>;
@@ -315,7 +316,7 @@ request_attr_validate(_Attr=event, _Val= <<"completed">>) ->
 request_attr_validate(_Attr=event, _Val= <<"stopped">>) ->
     true;
 request_attr_validate(_Attr=event, Val)->
-    error_logger:warning_msg("Invalid announce request event ~w", [Val]),
+    lager:error("Invalid announce request event ~w", [Val]),
     true;
 request_attr_validate(_Attr, _Val) ->
     true.
@@ -332,6 +333,8 @@ announce_pack_peer({PeerId, {IP, Port}}, _NPI=false) ->
 
 announce_pack_peer_compact({_PI, {IP, Port}}) when size(IP) == 4 ->
     <<(list_to_binary(tuple_to_list(IP)))/binary, Port:16>>;
+announce_pack_peer_compact({_PI, {IP, Port}}) when length(IP) == 4 ->
+    <<(list_to_binary(IP)/binary), Port:16>>;
 announce_pack_peer_compact(_P) ->
     <<>>.
 

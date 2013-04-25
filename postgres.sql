@@ -7,7 +7,7 @@ CREATE DATABASE etracker WITH OWNER = etracker ENCODING = 'UTF8';
 GRANT ALL ON DATABASE etracker TO etracker;
 \c etracker
 CREATE LANGUAGE plpgsql;
-CREATE TABLE torrent_info(
+CREATE UNLOGGED TABLE torrent_info(
        info_hash BYTEA PRIMARY KEY,
        leechers INTEGER DEFAULT 0,
        seeders INTEGER DEFAULT 0,
@@ -17,7 +17,7 @@ CREATE TABLE torrent_info(
        ctime TIMESTAMP  DEFAULT now()
 );
 
-CREATE TABLE torrent_user(
+CREATE UNLOGGED TABLE torrent_user(
        id SERIAL PRIMARY KEY,
        info_hash BYTEA NOT NULL,
        peer_id BYTEA NOT NULL,
@@ -31,5 +31,7 @@ CREATE TABLE torrent_user(
        mtime  TIMESTAMP  DEFAULT now(),
        CONSTRAINT torrent_user_info_hash_peer_id_idx UNIQUE(info_hash, peer_id)
 );
-CREATE INDEX torrent_user_seeders_idx ON torrent_user(info_hash) WHERE finished = true;
-CREATE INDEX torrent_user_leechers_idx ON torrent_user(info_hash) WHERE finished = false;
+CREATE INDEX torrent_user_seeders_idx ON torrent_user(info_hash)
+       WHERE finished = true and event != 'stopped';
+CREATE INDEX torrent_user_leechers_idx ON torrent_user(info_hash)
+       WHERE finished = false and event != 'stopped';

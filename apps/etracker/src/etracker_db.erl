@@ -13,7 +13,7 @@
 -export([system_info/0, system_info/1, system_info_update_counter/2]).
 -export([announce/1, torrent_info/1, torrent_infos/2, torrent_peers/2]).
 -export([expire_torrent_peers/1]).
--export([db_call/1, db_call/2, db_cast/1]).
+-export([import/4, db_call/1, db_call/2, db_cast/1]).
 
 -define(SERVER, ?MODULE).
 -define(INFO_TBL, etracker_info).
@@ -34,7 +34,7 @@
 
 -define(INFO_KEYS, (?INFO_COUNTERS ++ ?INFO_DB_KEYS)).
 
--define(TIMEOUT, 30 * 1000).
+-define(TIMEOUT, 60 * 1000).
 
 start_link() ->
     ets:new(?INFO_TBL, [named_table, set, public, {write_concurrency, true}]),
@@ -53,7 +53,7 @@ stop() ->
     poolboy:stop(?SERVER).
 
 announce(Ann) ->
-	db_cast({announce, Ann}).
+	db_call({announce, Ann}).
 
 torrent_peers(InfoHash, Num) ->
     CacheTTL = confval(db_cache_peers_ttl, 0),
@@ -128,6 +128,19 @@ system_info_update_counter(Key, Inc) when Key == announces
                                           orelse Key == invalid_queries
                                           orelse Key == deleted_peers ->
     ets:update_counter(?INFO_TBL, Key, Inc).
+
+import(MgrModule, DbModule, MgrParams, DbParams) ->
+    {ok, MgrPid} = MgrModule:start_link(MgrParams),
+    {ok, DbPid} = DbModule:start_link(DbParams),
+    ImportF = fun (Rec, Cnt) ->
+                      ok = db_call({write, Rec}),
+                      Cnt + 1
+              end,
+    InfoCnt = gen_server:call(DbPid, {fold, torrent_info, 0, ImportF}, infinity),
+    UserCnt = gen_server:call(DbPid, {fold, torrent_user, 0, ImportF}, infinity),
+    DbModule:stop(DbPid),
+    MgrModule:stop(MgrPid),
+    {ok, {InfoCnt, UserCnt}}.
 
 confval(Key, Default) ->
     etracker_env:get(Key, Default).

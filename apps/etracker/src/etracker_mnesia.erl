@@ -25,14 +25,15 @@
 -define(QUERY_CHUNK_SIZE, 10000).
 
 -define(TABLES, [torrent_info, torrent_user]).
--define(TABLES_TIMEOUT, 60000).
+-define(TABLES_TIMEOUT, 60).
+
 -record(state, {}).
 
 setup(Opts) ->
     setup([node()], Opts).
 
 setup(Nodes, Opts) ->
-    TablesTimeout = proplists:get_value(timeout, Opts, ?TABLES_TIMEOUT),
+    TablesTimeout = proplists:get_value(timeout, Opts, ?TABLES_TIMEOUT) * 1000,
     mnesia:create_schema(Nodes),
     mnesia:change_table_copy_type(schema, node(), disc_copies),
     mnesia:start(),
@@ -63,21 +64,16 @@ create_table(torrent_info, Nodes) ->
                                       ]);
 create_table(torrent_user, Nodes) ->
     mnesia:create_table(torrent_user, [
-                                       {type, set},
+                                       {type, ordered_set},
                                        {local_content, true},
                                        {attributes, record_info(fields, torrent_user)},
-                                       {index, [info_hash, mtime]},
-                                       {ram_copies, Nodes},
-                                       {storage_properties,
-                                        [{ets, [{read_concurrency, true},
-                                                {write_concurrency, true}]}]
-                                       }
+                                       {index, [mtime]},
+                                       {ram_copies, Nodes}
                                       ]),
-    mnesia:add_table_index(torrent_user, info_hash),
     mnesia:add_table_index(torrent_user, mtime).
 
 start_link(Opts) ->
-    TablesTimeout = proplists:get_value(timeout, Opts, ?TABLES_TIMEOUT),
+    TablesTimeout = proplists:get_value(timeout, Opts, ?TABLES_TIMEOUT) * 1000,
     gen_server:start_link(?MODULE, Opts, [{timeout, TablesTimeout}]).
 
 %%%===================================================================
@@ -89,6 +85,10 @@ init(Opts) ->
     setup(Opts),
     {ok, #state{}}.
 
+handle_call({announce, Peer}, _From, State) ->
+	F = process_announce(Peer),
+    mnesia:activity(ets, F),
+	{reply, ok, State};
 handle_call({torrent_info, InfoHash}, _From, State) when is_binary(InfoHash) ->
     F = fun() -> mnesia:dirty_read({torrent_info, InfoHash}) end,
 	case mnesia:activity(ets, F) of
@@ -139,10 +139,6 @@ handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
 
-handle_cast({announce, Peer}, State) ->
-	F = process_announce(Peer),
-    mnesia:activity(ets, F),
-	{noreply, State};
 handle_cast(stop, State) ->
     {stop, normal, State};
 handle_cast(_Msg, State) ->
@@ -175,14 +171,14 @@ process_expire_torrent_peers(ExpireTime) ->
                                     {S, L} = Val = if F == true -> {1, 0};
                                                       true -> {0, 1}
                                                    end,
-                                    {orddict:update(IH, fun ({SC, LC}) ->
+                                    {dict:update(IH, fun ({SC, LC}) ->
                                                                 {SC + S, LC + L}
                                                         end, Val, Ts),
                                      [Id|Us]
                                     }
-                            end, {orddict:new(), []}, Res),
+                            end, {dict:new(), []}, Res),
             lists:foreach(fun (Id) -> mnesia:dirty_delete({torrent_user, Id}) end, Users),
-            orddict:fold(fun (InfoHash, {Seeders, Leechers}, Acc) ->
+            dict:fold(fun (InfoHash, {Seeders, Leechers}, Acc) ->
                                  case mnesia:dirty_read({torrent_info, InfoHash}) of
                                      [] ->
                                          ok;
@@ -222,12 +218,12 @@ process_torrent_infos1('$end_of_table', _Callback) ->
 process_torrent_peers(InfoHash, Wanted) ->
     case mnesia:dirty_read({torrent_info, InfoHash}) of
         [] ->
-            [];
+            {0, 0, []};
         [#torrent_info{seeders=S, leechers=L}] ->
             Seeders = process_torrent_peers(seeders, InfoHash, Wanted, S),
             RestWanted = max(0, Wanted - length(Seeders)),
             Leechers = process_torrent_peers(leechers, InfoHash, RestWanted, L),
-            Seeders ++ Leechers
+            {S, L, Seeders ++ Leechers}
     end.
 
 process_torrent_peers(_PeerType, _InfoHash, Wanted, Available) when Wanted == 0
@@ -237,16 +233,18 @@ process_torrent_peers(PeerType, InfoHash, Wanted, Available) ->
     Query =
         case PeerType of
             seeders ->
-                ets:fun2ms(fun(#torrent_user{id={_, PeerId}, peer=Peer,
-                                                 info_hash=IH, left=L}) when IH == InfoHash,
-                                                                             L == 0 ->
-                                       {PeerId, Peer}
+                ets:fun2ms(fun(#torrent_user{id=Id, peer=Peer, finished=F})
+                                 when Id > {InfoHash, ?INFOHASH_MIN},
+                                      Id < {InfoHash, ?INFOHASH_MAX},
+                                      F == true ->
+                                       {element(2, Id), Peer}
                            end);
             leechers ->
-                ets:fun2ms(fun(#torrent_user{id={_, PeerId}, peer=Peer,
-                                             info_hash=IH, left=L}) when IH == InfoHash,
-                                                                         L /= 0 ->
-                                   {PeerId, Peer}
+                ets:fun2ms(fun(#torrent_user{id=Id, peer=Peer, finished=F})
+                                 when Id > {InfoHash, ?INFOHASH_MIN},
+                                      Id < {InfoHash, ?INFOHASH_MAX},
+                                      F /= true ->
+                                   {element(2, Id), Peer}
                            end)
         end,
     Available1 = max(Wanted, Available),
@@ -275,7 +273,6 @@ process_announce(A=#announce{
                      }) ->
     process_announce(A, #torrent_user{
                            id={InfoHash, PeerId},
-                           info_hash=InfoHash,
                            peer={IP, Port},
                            event=Evt,
                            uploaded=Upl, downloaded=Dld, left=Left
