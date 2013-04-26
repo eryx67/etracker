@@ -118,27 +118,16 @@ process_expire_torrent_peers(DT, ExpireTime) ->
     Q = ets:fun2ms(fun(#torrent_user{id=Id, mtime=M}) when M < ExpireTime ->
                            Id
                    end),
-    QueryF = fun () ->
-                     case ets:select(torrent_user, Q, ?QUERY_CHUNK_SIZE) of
-                         {Data, _} ->
-                             Data;
-                         _ ->
-                             []
-                     end
-             end,
-    process_expire_torrent_peers1(DT, QueryF, 0).
+    process_expire_torrent_peers1(DT, ets:select(torrent_user, Q, ?QUERY_CHUNK_SIZE), 0).
 
-process_expire_torrent_peers1(DT, QueryFun, Cnt) ->
-    case QueryFun() of
-        [] ->
-            Cnt;
-        Ids ->
-            lists:foreach(fun (Id) ->
-                                  delete_torrent_user(DT, Id)
-                          end,
-                          Ids),
-            process_expire_torrent_peers1(DT, QueryFun, length(Ids) + Cnt)
-    end.
+process_expire_torrent_peers1(_DT, '$end_of_table', Cnt) ->
+    Cnt;
+process_expire_torrent_peers1(DT, {Ids, Cont}, Cnt) ->
+    lists:foreach(fun (Id) ->
+                          delete_torrent_user(DT, Id)
+                  end,
+                  Ids),
+    process_expire_torrent_peers1(DT, ets:select(Cont), length(Ids) + Cnt).
 
 process_torrent_infos([], Callback) ->
     Q = ets:fun2ms(fun(TI) -> TI end),
