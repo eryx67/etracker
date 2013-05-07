@@ -25,7 +25,7 @@ handle(Req, S=#state{path=PathBins}) ->
 send(Req, Path, State=#state{www_dir=WwwDir}) ->
     case file(filename:join(Path), WwwDir) of
         {ok, Body} ->
-            Headers = [{<<"Content-Type">>, <<"text/html">>}],
+            Headers = [{<<"content-type">>, <<"text/html">>}],
             {ok, Req2} = cowboy_http_req:reply(200, Headers, Body, Req),
             {ok, Req2, State};
         _ ->

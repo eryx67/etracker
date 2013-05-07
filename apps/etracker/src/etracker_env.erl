@@ -12,13 +12,15 @@
 -define(APP, etracker).
 
 get(Key) ->
-    application:get_env(?APP, Key).
-
-get(Key, Default) ->
-    case application:get_env(?APP, Key) of
-        {ok, Value} -> Value;
-        undefined -> Default
+    case gproc:get_env(l, ?APP, Key, [app_env, {default, '_undefined_'}]) of
+        '_undefined_' ->
+            undefined;
+        Val ->
+            {ok, Val}
     end.
 
+get(Key, Default) ->
+    gproc:get_set_env(l, ?APP, Key, [app_env, {default, Default}]).
+
 set(Key, Value) ->
-    application:set_env(?APP, Key, Value).
+    gproc:set_env(l, ?APP, Key, Value, [app_env]).

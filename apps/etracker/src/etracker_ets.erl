@@ -36,6 +36,7 @@ start_link(Opts) ->
 %%%===================================================================
 
 init(_Opts) ->
+    process_flag(trap_exit, true),
     DT= gen_server:call(?DB_MGR, db_type),
     random:seed(erlang:now()),
     {ok, #state{db_type=DT}}.
@@ -57,8 +58,11 @@ handle_call({torrent_infos, InfoHashes, Callback}, _From, State) when is_list(In
 handle_call({torrent_peers, InfoHash, Wanted}, _From, S=#state{db_type=DT}) ->
     Ret = process_torrent_peers(DT, InfoHash, Wanted),
     {reply, Ret, S};
-handle_call({expire_torrent_peers, ExpireTime}, _From, S=#state{db_type=DT}) ->
+handle_call({expire, torrent_user, ExpireTime}, _From, S=#state{db_type=DT}) ->
     Ret = process_expire_torrent_peers(DT, ExpireTime),
+    {reply, Ret, S};
+handle_call({expire, udp_connection_info, ExpireTime}, _From, S) ->
+    Ret = process_expire_udp_connections(ExpireTime),
     {reply, Ret, S};
 handle_call({system_info, torrents}, _From, State) ->
     {reply, ets:info(torrent_info, size), State};
@@ -79,6 +83,12 @@ handle_call({system_info, leechers}, _From, State=#state{db_type=ets}) ->
 handle_call({write, TI}, _From, State) when is_record(TI, torrent_info) ->
     ets:insert(torrent_info, TI),
     {reply, ok, State};
+handle_call({member, Tbl, Key}, _From, State) ->
+    Ret = ets:member(Tbl, Key),
+    {reply, Ret, State};
+handle_call({write, CI}, _From, State) when is_record(CI, udp_connection_info) ->
+    ets:insert(udp_connection_info, CI),
+    {reply, ok, State};
 handle_call({write, TU}, _From, S=#state{db_type=DT})  when is_record(TU, torrent_user) ->
     write_torrent_user(DT, TU),
     {reply, ok, S};
@@ -93,15 +103,9 @@ handle_call(Request, _From, State) ->
     Reply = {error, invalid_request},
     {reply, Reply, State}.
 
-handle_cast(stop, State) ->
-    {stop, normal, State};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info(stop, State) ->
-    {stop, shutdown, State};
-handle_info({'EXIT', _, _}, State) ->
-    {stop, shutdown, State};
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -114,11 +118,21 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+process_expire_udp_connections(ExpireTime) ->
+    ConnQ = ets:fun2ms(fun(#udp_connection_info{mtime=M}) when M < ExpireTime ->
+                               true
+                   end),
+    ConnCnt = ets:select_delete(udp_connection_info, ConnQ),
+    ConnCnt.
+
 process_expire_torrent_peers(DT, ExpireTime) ->
-    Q = ets:fun2ms(fun(#torrent_user{id=Id, mtime=M}) when M < ExpireTime ->
+    PeersQ = ets:fun2ms(fun(#torrent_user{id=Id, mtime=M}) when M < ExpireTime ->
                            Id
                    end),
-    process_expire_torrent_peers1(DT, ets:select(torrent_user, Q, ?QUERY_CHUNK_SIZE), 0).
+    PeersCnt = process_expire_torrent_peers1(DT,
+                                             ets:select(torrent_user, PeersQ, ?QUERY_CHUNK_SIZE),
+                                             0),
+    PeersCnt.
 
 process_expire_torrent_peers1(_DT, '$end_of_table', Cnt) ->
     Cnt;
@@ -133,14 +147,14 @@ process_torrent_infos([], Callback) ->
     Q = ets:fun2ms(fun(TI) -> TI end),
     process_torrent_infos1(ets:select(torrent_info, Q, ?QUERY_CHUNK_SIZE), Callback);
 process_torrent_infos(IHs, Callback) ->
-    Data = lists:foldl(fun (IH, Acc) ->
-                               case ets:lookup(torrent_info, IH) of
-                                   [] ->
-                                       Acc;
-                                   [TI] ->
-                                       [TI|Acc]
-                               end
-                       end, [], IHs),
+    Data = lists:map(fun (IH) ->
+                             case ets:lookup(torrent_info, IH) of
+                                 [] ->
+                                     undefined;
+                                 [TI] ->
+                                     TI
+                             end
+                     end, IHs),
     Callback(Data).
 
 process_torrent_infos1({Data, Cont}, Callback) ->

@@ -35,3 +35,8 @@ CREATE INDEX torrent_user_seeders_idx ON torrent_user(info_hash)
        WHERE finished = true and event != 'stopped';
 CREATE INDEX torrent_user_leechers_idx ON torrent_user(info_hash)
        WHERE finished = false and event != 'stopped';
+
+CREATE UNLOGGED TABLE connection_info(
+       id BYTEA PRIMARY KEY,
+       mtime  TIMESTAMP  DEFAULT now()
+);

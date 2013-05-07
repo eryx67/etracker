@@ -11,7 +11,8 @@
 %% API
 -export([start_link/0, add_handler/2, delete_handler/2]).
 
--export([announce/1, scrape/1, invalid_query/1, failed_query/1, unknown_query/1, cleanup_completed/1]).
+-export([announce/1, scrape/1, invalid_query/1, failed_query/1, unknown_query/1, cleanup_completed/2]).
+-export([subscribe/0, unsubscribe/0]).
 
 %% gen_event callbacks
 -export([init/1, handle_event/2, handle_call/2,
@@ -21,7 +22,14 @@
 
 -define(SERVER, ?MODULE).
 
--record(state, {}).
+-record(state, {handler, handler_state}).
+
+subscribe() ->
+    Self = self(),
+    gen_event:add_handler(?SERVER, {?MODULE, Self}, #state{handler=Self}).
+
+unsubscribe() ->
+    gen_event:delete_handler(?SERVER, {?MODULE, self()}, []).
 
 %% @doc Publish event about received announce.
 %% @end
@@ -33,8 +41,8 @@ announce(Ann) ->
 scrape(InfoHashes) ->
     notify({scrape, InfoHashes}).
 
-cleanup_completed(Deleted) ->
-    notify({cleanup_completed, Deleted}).
+cleanup_completed(Type, Deleted) ->
+    notify({cleanup_completed, Type, Deleted}).
 
 invalid_query(Error) ->
     notify({invalid_query, Error}).
@@ -56,6 +64,10 @@ start_link() ->
 %% @doc Adds an event handler
 %% @end
 -spec add_handler(atom() | {atom(), term()}, term()) -> ok | {'EXIT', term()} | term().
+add_handler(HlrF, HlrState) when is_function(HlrF)->
+    HlrRef = {?MODULE, make_ref()},
+    gen_event:add_handler(?SERVER, HlrRef, #state{handler=HlrF, handler_state=HlrState}),
+    HlrRef;
 add_handler(Hlr, Args) ->
     gen_event:add_handler(?SERVER, Hlr, Args).
 
@@ -69,14 +81,33 @@ delete_handler(Hlr, Args) ->
 %%% gen_event callbacks
 %%%===================================================================
 
+init(S=#state{}) ->
+    {ok, S};
 init([]) ->
     {ok, #state{}}.
-
-handle_event({announce, _Data}, State)->
+handle_event(Event, S=#state{handler=HlrPid}) when is_pid(HlrPid) ->
+    HlrPid ! {etracker_event, Event},
+    {ok, S};
+handle_event(Event, S=#state{handler=HlrF, handler_state=HlrState})
+  when is_function(HlrF) ->
+    {ok, S=#state{handler_state=HlrF(Event, HlrState)}};
+handle_event({announce, #announce{protocol=Proto}}, State)->
     etracker_db:system_info_update_counter(announces, 1),
+    case Proto of
+        udp ->
+            etracker_db:system_info_update_counter(udp_connections, 1);
+        _ ->
+            ok
+    end,
     {ok, State};
-handle_event({scrape, _Data}, State)->
+handle_event({scrape, #scrape{protocol=Proto}}, State)->
     etracker_db:system_info_update_counter(scrapes, 1),
+    case Proto of
+        udp ->
+            etracker_db:system_info_update_counter(udp_connections, 1);
+        _ ->
+            ok
+    end,
     {ok, State};
 handle_event({invalid_query, _Data}, State)->
     etracker_db:system_info_update_counter(invalid_queries, 1),
@@ -87,8 +118,11 @@ handle_event({failed_query, _Data}, State)->
 handle_event({unknown_query, _Data}, State)->
     etracker_db:system_info_update_counter(unknown_queries, 1),
     {ok, State};
-handle_event({cleanup_completed, Deleted}, State)->
+handle_event({cleanup_completed, peers, Deleted}, State)->
     etracker_db:system_info_update_counter(deleted_peers, Deleted),
+   {ok, State};
+handle_event({cleanup_completed, udp_connections, Deleted}, State)->
+    etracker_db:system_info_update_counter(udp_deleted_connections, Deleted),
    {ok, State};
 handle_event(_, State) ->
     {ok, State}.

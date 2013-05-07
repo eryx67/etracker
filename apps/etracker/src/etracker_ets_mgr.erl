@@ -22,7 +22,7 @@
 
 -define(SERVER, ?MODULE).
 -define(DUMP_INTERVAL, 3600). % sec
--define(TABLES, [torrent_info, torrent_user, torrent_leecher, torrent_seeder]).
+-define(TABLES, [torrent_info, torrent_user, torrent_leecher, torrent_seeder, udp_connection_info]).
 -define(PERSISTENT_TABLES, [torrent_info, torrent_user]).
 
 -record(state, {
@@ -46,6 +46,7 @@ init(Opts) ->
     DbType = proplists:get_value(db_type, Opts, dict),
     random:seed(erlang:now()),
     process_flag(trap_exit, true),
+    process_flag(priority, high),
     Self = self(),
     TRef = erlang:send_after(DumpIval, Self, dump_tables),
     {ok, #state{dump_interval=DumpIval,
@@ -250,6 +251,12 @@ open_table(TN=torrent_user, DataDir) ->
     ets:new(TN, EtsOpts),
     ok = open_dets(TN, [{type, set}|TblOpts], DataDir),
     true = ets:from_dets(TN, TN);
+open_table(TN=udp_connection_info, _DataDir) ->
+    TblOpts = [set, {keypos, #udp_connection_info.id}],
+    EtsOpts = TblOpts ++ [public, named_table,
+                          {read_concurrency, true}
+                         ],
+    ets:new(TN, EtsOpts);
 open_table(TN, _DataDir) when TN == torrent_seeder
                               orelse TN == torrent_leecher ->
     TblOpts = [ordered_set, {keypos, #torrent_peer.id}],

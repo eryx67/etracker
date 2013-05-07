@@ -1,3 +1,10 @@
+%%% @author Vladimir G. Sekissov <eryx67@gmail.com>
+%%% @copyright (C) 2013, Vladimir G. Sekissov
+%%% @doc
+%%%
+%%% @end
+%%% Created : 26 Apr 2013 by Vladimir G. Sekissov <eryx67@gmail.com>
+
 -define(ANNOUNCE_ANSWER_INTERVAL, 60 * 30).
 -define(ANNOUNCE_ANSWER_MAX_PEERS, 50).
 -define(INFOHASH_MAX, << 16#ff, 16#ff, 16#ff, 16#ff, 16#ff,
@@ -10,6 +17,19 @@
                          16#00, 16#00, 16#00, 16#00, 16#00 >>).
 
 -define(INFOHASH_LENGTH, 20).
+
+-define(UDP_ACTION_CONNECT,  << 0:32 >>).
+-define(UDP_ACTION_ANNOUNCE, << 1:32 >>).
+-define(UDP_ACTION_SCRAPE,   << 2:32 >>).
+-define(UDP_ACTION_ERROR,    << 3:32 >>).
+
+-define(UDP_EVENT_NONE,      << 0:32 >>).
+-define(UDP_EVENT_COMPLETED, << 1:32 >>).
+-define(UDP_EVENT_STARTED,   << 2:32 >>).
+-define(UDP_EVENT_STOPPED,   << 3:32 >>).
+
+-define(UDP_CONNECTION_ID, << 16#41727101980:64 >>).
+-define(UDP_SCRAPE_MAX_TORRENTS, 74).
 
 -record(announce, {
           info_hash, %% urlencoded 20-byte SHA1 hash of the value of the info key from the Metainfo file
@@ -24,11 +44,14 @@
           ip, %% Optional. The true IP address of the client machine
           numwant = 50, %% Optional. Number of peers that the client would like to receive.
           key, %% Optional. An additional client identification mechanism that is not shared with any peers. It is intended to allow a client to prove their identity should their IP address change.
-          trackerid %% Optional. If a previous announce contained a tracker id, it should be set here.
+          trackerid, %% Optional. If a previous announce contained a tracker id, it should be set here.
+          protocol = http
+
          }).
 
 -record(scrape, {
-          files = []
+          info_hashes = [],
+          protocol = http
          }).
 
 %% Database schema
@@ -56,4 +79,9 @@
 -record(torrent_peer, {
           id = {undefined, undefined},   % {info_hash, peer_id}
           peer = {undefined, undefined}  % {address, port}
+         }).
+
+-record(udp_connection_info, {
+          id,
+          mtime = erlang:now()
          }).

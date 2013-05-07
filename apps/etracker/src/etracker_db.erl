@@ -11,8 +11,8 @@
 %% API
 -export([start_link/0, stop/0]).
 -export([system_info/0, system_info/1, system_info_update_counter/2]).
--export([announce/1, torrent_info/1, torrent_infos/2, torrent_peers/2]).
--export([expire_torrent_peers/1]).
+-export([announce/1, full_scrape/2, torrent_info/1, torrent_infos/2, torrent_peers/2]).
+-export([expire/2, write/1, member/2]).
 -export([import/4, db_call/1, db_call/2, db_cast/1]).
 
 -define(SERVER, ?MODULE).
@@ -29,7 +29,9 @@
                         invalid_queries,
                         failed_queries,
                         unknown_queries,
-                        deleted_peers
+                        deleted_peers,
+                        udp_connections,
+                        udp_deleted_connections
                        ]).
 
 -define(INFO_KEYS, (?INFO_COUNTERS ++ ?INFO_DB_KEYS)).
@@ -37,7 +39,13 @@
 -define(TIMEOUT, 60 * 1000).
 
 start_link() ->
-    ets:new(?INFO_TBL, [named_table, set, public, {write_concurrency, true}]),
+    {ok, Cwd} = file:get_cwd(),
+    CacheDir = filename:absname(confval(db_cache_dir, "etracker_data"),
+                                Cwd),
+    ok = filelib:ensure_dir(filename:join(CacheDir, "tmp")),
+    etracker_env:set(db_cache_dir, CacheDir),
+    ets:new(?INFO_TBL, [named_table, set, public,
+                        {read_concurrency, true}, {write_concurrency, true}]),
     ets:insert(?INFO_TBL, [{K, 0} || K <- ?INFO_COUNTERS]),
     DefaultOpts = {
       [{worker_module, etracker_mnesia},
@@ -73,14 +81,65 @@ torrent_peers(InfoHash, Num) ->
             end
     end.
 
-expire_torrent_peers(ExpireTime) ->
-    db_call({expire_torrent_peers, ExpireTime}, infinity).
+expire(Type, ExpireTime) ->
+    db_call({expire, Type, ExpireTime}, infinity).
+
+full_scrape(FileName, EncodeFun) ->
+    CacheTTL = confval(db_cache_full_scrape_ttl, 0),
+    CacheKey = {file, FileName},
+    case CacheTTL of
+        0 ->
+            false;
+        _ ->
+            case etracker_db_cache:get(CacheKey) of
+                undefined ->
+                    Self = self(),
+                    {ok, CacheDir} = confval(db_cache_dir),
+                    FN = filename:absname(FileName, CacheDir),
+                    WriterF = fun () ->
+                                    write_full_scrape(FN, EncodeFun)
+                              end,
+                    {Pid, OwnerPid} = gproc:reg_or_locate({n, l, CacheKey}, Self, WriterF),
+                    MonRef = erlang:monitor(process, Pid),
+                    receive
+                        {'DOWN', MonRef, _, Pid, Reason} ->
+                            if (Reason == normal) orelse (Reason == noproc) ->
+                                    case OwnerPid of
+                                        Self ->
+                                            etracker_db_cache:put_ttl(CacheKey, FN, CacheTTL);
+                                        _ ->
+                                            ok
+                                    end,
+                                    {ok, FN};
+                                true ->
+                                    {error, Reason}
+                            end
+                    end;
+                FN ->
+                    {ok, FN}
+            end
+    end.
+
+write_full_scrape(FileName, EncodeFun) ->
+    {ok, Fd} = file:open(FileName, [write]),
+    WriteF = fun (Data) ->
+                     EncData = EncodeFun(Data),
+                     ok = file:write(Fd, EncData)
+             end,
+    torrent_infos([], WriteF),
+    ok = file:close(Fd).
 
 torrent_info(InfoHash) when is_binary(InfoHash) ->
 	db_call({torrent_info, InfoHash}).
 
 torrent_infos(InfoHashes, Callback) when is_list(InfoHashes) ->
-	db_call({torrent_infos, InfoHashes, Callback}).
+	db_call({torrent_infos, InfoHashes, Callback}, infinity).
+
+write(Data) ->
+    db_call({write, Data}).
+
+member(Tbl, Key) ->
+    db_call({member, Tbl, Key}).
 
 system_info() ->
     [{K, system_info(K)} || K <- ?INFO_DB_KEYS] ++ ets:tab2list(?INFO_TBL).
@@ -111,7 +170,9 @@ system_info(Key) when Key == announces
                       orelse Key == unknown_queries
                       orelse Key == failed_queries
                       orelse Key == invalid_queries
-                      orelse Key == deleted_peers ->
+                      orelse Key == deleted_peers
+                      orelse Key == udp_connections
+                      orelse Key == udp_deleted_connections ->
     case ets:lookup(?INFO_TBL, Key) of
         [{_, Val}] ->
             Val;
@@ -126,7 +187,9 @@ system_info_update_counter(Key, Inc) when Key == announces
                                           orelse Key == unknown_queries
                                           orelse Key == failed_queries
                                           orelse Key == invalid_queries
-                                          orelse Key == deleted_peers ->
+                                          orelse Key == deleted_peers
+                                          orelse Key == udp_connections
+                                          orelse Key == udp_deleted_connections->
     ets:update_counter(?INFO_TBL, Key, Inc).
 
 import(MgrModule, DbModule, MgrParams, DbParams) ->
@@ -141,6 +204,9 @@ import(MgrModule, DbModule, MgrParams, DbParams) ->
     DbModule:stop(DbPid),
     MgrModule:stop(MgrPid),
     {ok, {InfoCnt, UserCnt}}.
+
+confval(Key) ->
+    etracker_env:get(Key).
 
 confval(Key, Default) ->
     etracker_env:get(Key, Default).

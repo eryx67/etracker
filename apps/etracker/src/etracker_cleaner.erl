@@ -79,9 +79,14 @@ do_clean(ExpireTime, State=#state{clean_interval=CleanInterval}) ->
     NxtExpDT = calendar:now_to_local_time(NxtExpireTime),
     lager:info("~s started, next cleanup in ~w ms, next expire time ~p",
                [?MODULE, CleanInterval, NxtExpDT]),
-    Cnt = etracker_db:expire_torrent_peers(ExpireTime),
-    etracker_event:cleanup_completed(Cnt),
-    lager:info("~s cleanup completed, deleted ~w", [?MODULE, Cnt]),
+
+    PeersCnt = etracker_db:expire(torrent_user, ExpireTime),
+    lager:info("~s peers cleanup completed, deleted ~w", [?MODULE, PeersCnt]),
+    etracker_event:cleanup_completed(peers, PeersCnt),
+    ConnCnt = etracker_db:expire(udp_connection_info, ExpireTime),
+    lager:info("~s udp connections cleanup completed, deleted ~w", [?MODULE, PeersCnt]),
+    etracker_event:cleanup_completed(udp_connections, ConnCnt),
+
     Self = self(),
     TRef = erlang:send_after(CleanInterval, Self, {clean, NxtExpireTime}),
     State#state{tref=TRef, expire_time=NxtExpireTime}.

@@ -14,14 +14,15 @@
              etracker_mnesia_mgr,
              etracker_ets,
              etracker_ets_mgr,
-             etracker_hanoidb,
-             etracker_hanoidb_mgr,
              etracker_pgsql,
              etracker_pgsql_mgr,
              etracker_cleaner,
              etracker_http_srv,
              etracker_http_static,
-             etracker_http_request
+             etracker_http_request,
+             etracker_udp_srv,
+             etracker_udp_sup,
+             etracker_udp_request
             ]},
   {registered, []},
   {applications, [

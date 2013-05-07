@@ -17,10 +17,11 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
--define(SERVER, ?MODULE).
-
--record(state, {}).
 -include("etracker.hrl").
+
+-define(SERVER, ?MODULE).
+-define(HTTP_LISTENER, etracker_http).
+-record(state, {}).
 
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
@@ -30,16 +31,19 @@ start_link() ->
 %%%===================================================================
 
 init([]) ->
+    process_flag(trap_exit, true),
     Port = confval(http_port, 8080),
     Ip = confval(http_ip, "127.0.0.1"),
     NumAcceptors = confval(http_num_acceptors, 16),
     IpStr = case is_list(Ip) of true -> Ip; false -> inet_parse:ntoa(Ip) end,
-    error_logger:info_msg("~s listening on http://~s:~B/~n", [?SERVER, IpStr,Port]),
-    {ok, App} = application:get_application(),
-    cowboy:start_listener({App, http}, NumAcceptors,
-                          cowboy_tcp_transport, [{port, Port}],
-                          cowboy_http_protocol, [{dispatch, dispatch_rules()}]
-                         ),
+    lager:info("~s listening on http://~s:~B/~n", [?SERVER, IpStr,Port]),
+    Dispatch = cowboy_router:compile(dispatch_rules()),
+    {ok, _Pid} = cowboy:start_http(?HTTP_LISTENER, NumAcceptors,
+                                   [{port, Port}
+                                    , {max_connections, infinity}
+                                   ],
+                                   [{env, [{dispatch, Dispatch}]}]
+                                  ),
     {ok, #state{}}.
 
 %%--------------------------------------------------------------------
@@ -73,8 +77,7 @@ handle_info(_Info, State) ->
 %% @end
 %%--------------------------------------------------------------------
 terminate(_Reason, _State) ->
-    {ok, App} = application:get_application(),
-    cowboy:stop_listener({App, http}),
+    ok = cowboy:stop_listener(?HTTP_LISTENER),
     ok.
 
 %%--------------------------------------------------------------------
@@ -112,12 +115,13 @@ dispatch_rules() ->
                                 {scrape_request_interval, 60 * 30}
                                ]) ++ CommonParams,
     %% {Host, list({Path, Handler, Opts})}
-    [{'_', [
-
-            {[], etracker_http_static, {CommonParams, [<<"html">>,<<"index.html">>]}}
-            , {[<<"announce">>], etracker_http_request, {announce, AnnounceParams}}
-            , {[<<"scrape">>], etracker_http_request, {scrape, ScrapeParams}}
-            , {[<<"stats">>], etracker_http_request, {stats, CommonParams}}
+    [{'_', [{"/", cowboy_static, [{directory, WwwDir}
+                                  , {file, <<"html/index.html">>}
+                                  , {mimetypes, {fun mimetypes:path_to_mimes/2, default}}
+                                 ]}
+            , {"/announce", etracker_http_request, {announce, AnnounceParams}}
+            , {"/scrape", etracker_http_request, {scrape, ScrapeParams}}
+            , {"/stats", etracker_http_request, {stats, CommonParams}}
            ]}].
 
 confval(Key, Default) ->

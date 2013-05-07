@@ -81,6 +81,7 @@ start_link(Opts) ->
 %%%===================================================================
 
 init(Opts) ->
+    process_flag(trap_exit, true),
     random:seed(erlang:now()),
     setup(Opts),
     {ok, #state{}}.
@@ -139,15 +140,9 @@ handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
 
-handle_cast(stop, State) ->
-    {stop, normal, State};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info(stop, State) ->
-    {stop, shutdown, State};
-handle_info({'EXIT', _, _}, State) ->
-    {stop, shutdown, State};
 handle_info(_Info, State) ->
     {noreply, State}.
 

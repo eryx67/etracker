@@ -6,65 +6,7 @@
 
 -define(PEERS, test_peers).
 -define(TRACKER_URL, "http://localhost:8080").
-
-start_apps() ->
-    etorrent:start_app(),
-    etracker:start(),
-    timer:sleep(5000),
-    [].
-
-setup_announce() ->
-    ets:new(?PEERS, [named_table, public]),
-    random:seed(now()),
-    random_announce().
-
-stop(_SD) ->
-    etracker:stop(),
-    etorrent:stop_app() .
-
-cleaner_test_start() ->
-    application:load(etracker),
-    application:set_env(etracker, clean_interval, 5),
-    etracker:start(),
-    timer:sleep(1000),
-    cleaner_test_start1().
-
-cleaner_test_start1() ->
-    InfoHash = list_to_binary(random_string(20)),
-    PeerId1 = list_to_binary(random_string(20)),
-    PeerId2 = list_to_binary(random_string(20)),
-    Mtime = {Mega, Sec, Micro} = now(),
-    TI = #torrent_info{
-            info_hash=InfoHash,
-            leechers=3,
-            seeders=3
-           },
-    SeederMtime = Mtime = {Mega, Sec, Micro},
-    Seeder = #torrent_user{
-                id={InfoHash, PeerId1},
-                peer={{127, 0, 0, 1}, 6969},
-                finished=true,
-                mtime=SeederMtime
-               },
-    LeecherMtime = {Mega, Sec + 10, Micro},
-    Leecher = #torrent_user{
-                 id={InfoHash, PeerId2},
-                 peer={{127, 0, 0, 1}, 6969},
-                 finished=false,
-                 mtime=LeecherMtime
-                },
-    ok = write_record(TI),
-    ok = write_record(Seeder),
-    ok = write_record(Leecher),
-    [TI, [Seeder, Leecher]].
-
-cleaner_test_stop([TI, TUs]) ->
-    application:set_env(etracker, clean_interval, 2700),
-    delete_record(TI),
-    lists:foreach(fun (TU) ->
-                          delete_record(TU)
-                  end, TUs),
-    etracker:stop().
+-define(TRACKER_PEER, {{127, 0, 0, 1}, 8080}).
 
 etracker_test_() ->
     {setup,
@@ -91,124 +33,199 @@ etracker_test_() ->
     }.
 
 etracker_cleaner_test_() ->
-    ok = application:load(etracker),
-    {ok, {WorkerArgs, _}} = etracker_env:get(db_pool),
-    Mod = proplists:get_value(worker_module, WorkerArgs),
-    case Mod of
-        etracker_mnesia ->
-            {setup,
-             fun cleaner_test_start/0,
-             fun cleaner_test_stop/1,
-             fun (SD) ->
-                     {inorder,
-                      [{timeout, 60,
-                        [
-                         cleaner_checks(SD)
-                        ]},
-                       check_stats_after_clean()
-                      ]}
-             end
-            };
-        _ ->
-            []
+    application:load(etracker),
+    {setup,
+     fun cleaner_test_start/0,
+     fun cleaner_test_stop/1,
+     fun (SD) ->
+             {inorder,
+              [{timeout, 60,
+                [
+                 cleaner_checks1(SD),
+                 cleaner_checks2(SD)
+                ]},
+               check_stats_after_clean()
+              ]}
+     end
+    }.
+
+start_apps() ->
+    etorrent:start_app(),
+    etracker:start(),
+    timer:sleep(5000),
+    [].
+
+setup_announce() ->
+    ets:new(?PEERS, [named_table, public]),
+    random:seed(now()),
+    random_announce().
+
+stop(_SD) ->
+    etracker:stop(),
+    etorrent:stop_app() .
+
+cleaner_test_start() ->
+    application:load(etracker),
+    application:set_env(etracker, clean_interval, 5),
+    etracker:start(),
+    timer:sleep(1000),
+    cleaner_test_start1().
+
+cleaner_test_start1() ->
+    InfoHash = random_string(20),
+    PeerId1 = random_string(20),
+    PeerId2 = random_string(20),
+    {Mega, Sec, Micro} = now(),
+    TI = #torrent_info{
+            info_hash=InfoHash,
+            leechers=3,
+            seeders=3
+           },
+    SeederMtime = {Mega, Sec - 2, Micro},
+    Seeder = #torrent_user{
+                id={InfoHash, PeerId1},
+                peer={{127, 0, 0, 1}, 6969},
+                finished=true,
+                mtime=SeederMtime
+               },
+    LeecherMtime = {Mega, Sec, Micro},
+    Leecher = #torrent_user{
+                 id={InfoHash, PeerId2},
+                 peer={{127, 0, 0, 1}, 6969},
+                 finished=false,
+                 mtime=LeecherMtime
+                },
+    ok = write_record(TI),
+    ok = write_record(Seeder),
+    ok = write_record(Leecher),
+    [TI, Seeder, Leecher].
+
+cleaner_test_stop([TI, _Seeder, _Leecher]) ->
+    application:set_env(etracker, clean_interval, 2700),
+    delete_record(TI),
+    etracker:stop().
+
+cleaner_checks1([#torrent_info{info_hash=IH, seeders=_S, leechers=_L},
+                 _Seeder, _Leecher]) ->
+    etracker_event:subscribe(),
+    receive
+        {etracker_event, {cleanup_completed, peers, Deleted}} ->
+            etracker_db:torrent_peers(IH, 50),
+            #torrent_info{seeders=S1, leechers=L1} = etracker_db:torrent_info(IH),
+            [?_assertEqual(2, Deleted),
+             ?_assertEqual(S1, 0),
+             ?_assertEqual(L1, 1)]
+    after 10000 ->
+            exit(timeout)
     end.
 
-cleaner_checks([TI, TUs]) ->
-    mnesia:subscribe({table, torrent_info, simple}),
-    mnesia:subscribe({table, torrent_user, simple}),
-    cleaner_checks(TI, TUs, []).
-
-cleaner_checks(_TI, [], Acc) ->
-    mnesia:unsubscribe({table, torrent_info, simple}),
-    mnesia:unsubscribe({table, torrent_user, simple}),
-    Acc;
-cleaner_checks(TI, [TU|Rest], Acc) ->
-    {TI1, Tests} = cleaner_check_user(TI, TU, [false, false], []),
-    cleaner_checks(TI1, Rest, Acc ++ Tests).
-
-cleaner_check_user(TI, _TU, [ok, ok], Acc) ->
-    {TI, Acc};
-cleaner_check_user(TI=#torrent_info{info_hash=IH, seeders=S, leechers=L},
-                   TU=#torrent_user{id=Id, finished=F},
-                   [TIOk, TUOk], Acc) ->
+cleaner_checks2([#torrent_info{info_hash=IH, seeders=_S, leechers=_L},
+                 _Seeder, _Leecher]) ->
+    etracker_event:subscribe(),
     receive
-        {mnesia_table_event, {delete, {torrent_user, Id}, _}} ->
-            cleaner_check_user(TI, TU, [TIOk, ok], Acc);
-        {mnesia_table_event, {write,
-                              TI1=#torrent_info{info_hash=IH, seeders=S1, leechers=L1}, _}} ->
-            Tests = if F == true ->
-                            [?_assertEqual(S1, S - 1),
-                             ?_assertEqual(L1, L)];
-                       true ->
-                            [?_assertEqual(S1, S),
-                             ?_assertEqual(L1, L - 1)]
-                    end,
-            cleaner_check_user(TI1, TU, [ok, TUOk], Acc ++ Tests);
-        _ ->
-            cleaner_check_user(TI, TU, [TIOk, TUOk], Acc)
+        {etracker_event, {cleanup_completed, peers, Deleted}} ->
+            etracker_db:torrent_peers(IH, 50),
+            #torrent_info{seeders=S1, leechers=L1} = etracker_db:torrent_info(IH),
+            [?_assertEqual(1, Deleted),
+             ?_assertEqual(S1, 0),
+             ?_assertEqual(L1, 0)]
+    after 10000 ->
+            exit(timeout)
     end.
 
 leecher_first_started(Ann) ->
     [_Ih, PeerId, Port] = [orddict:fetch(K, Ann) || K <- [info_hash, peer_id, port]],
     ets:insert(?PEERS, {leecher_first, PeerId, Port}),
     Ann1 = lists:foldl(fun ({K, V}, D) -> orddict:store(K, V, D) end,
-                       Ann, [{left, 12345}, {event, started}, {compact, 0}]),
-    {ok, Resp1} = send_announce(orddict:to_list(Ann1)),
-    {ok, Resp2} = send_announce(orddict:to_list(Ann1)),
+                       Ann, [{left, 6789}, {event, started}, {compact, 0}]),
+    {ok, Resp1} = send_announce_udp(orddict:to_list(Ann1)),
+    {ok, Resp2} = send_announce_tcp(orddict:to_list(Ann1)),
+    {ok, Resp3} = send_announce_tcp(orddict:to_list(Ann1)),
 
     Checks = [{<<"incomplete">>, 1}, {<<"complete">>, 0}, {<<"peers">>, []}],
     GenF = fun (R) ->
                    [?_assertEqual(proplists:get_value(K, R), V) || {K, V} <- Checks]
            end,
-    [GenF(Resp1), GenF(Resp2)].
+    [GenF(Resp1), GenF(Resp2), GenF(Resp3)].
 
 leecher_first_invalid_requests(Ann) ->
     Ann1 = orddict:store(info_hash, <<"bad_hash">>, Ann),
     Ann2 = orddict:store(port, "bad_port", Ann),
     Ann3 = orddict:erase(info_hash, Ann),
-    {ok, Resp1} = send_announce(orddict:to_list(Ann1)),
-    {ok, Resp2} = send_announce(orddict:to_list(Ann2)),
-    {ok, Resp3} = (catch send_announce(orddict:to_list(Ann3))),
+    {ok, Resp1} = send_announce_tcp(orddict:to_list(Ann1)),
+    {ok, Resp2} = send_announce_tcp(orddict:to_list(Ann2)),
+    {ok, Resp3} = (catch send_announce_tcp(orddict:to_list(Ann3))),
 
     [?_assertEqual([{<<"failure reason">>,<<"info_hash invalid value">>}], Resp1),
      ?_assertMatch({{400, _R}, _H, _B}, Resp2),
      ?_assertEqual([{<<"failure reason">>,<<"info_hash invalid value">>}], Resp3)
     ].
 
-check_stats_after_clean() ->
-    KV = [{<<"seeders">>,0},
-          {<<"leechers">>,0},
-          {<<"peers">>,0},
-          {<<"unknown_queries">>,0},
-          {<<"invalid_queries">>,0},
-          {<<"scrapes">>,0},
-          {<<"announces">>,0},
-          {<<"failed_queries">>,0},
-          {<<"deleted_peers">>,3}],
-    check_stats(KV).
+leecher_second_started(AnnDict) ->
+    [IH, PeerId, Port] = [orddict:fetch(K, AnnDict) || K <- [info_hash, peer_id, port]],
+    PeerId1 = random_string(20),
+    ets:insert(?PEERS, {leecher_second, PeerId1, 1730}), % udp last
+    Ann1 = lists:foldl(fun ({K, V}, D) -> orddict:store(K, V, D) end,
+                       AnnDict, [{peer_id, PeerId1}, {left, 456}, {event, started}, {compact, 0}]),
+    Ann2 = lists:foldl(fun ({K, V}, D) -> orddict:store(K, V, D) end,
+                       AnnDict, [{peer_id, PeerId1}, {left, 456}, {event, none}, {compact, 0}]),
 
-check_stats_after_test(_) ->
-    KV = [{<<"seeders">>,1},
-          {<<"leechers">>,0},
-          {<<"peers">>,1},
-          {<<"unknown_queries">>,0},
-          {<<"invalid_queries">>,2},
-          {<<"scrapes">>,2},
-          {<<"announces">>,15},
-          {<<"failed_queries">>,1},
-          {<<"deleted_peers">>,0}],
-    check_stats(KV).
+    {ok, Resp1} = send_announce_tcp(orddict:to_list(Ann1)),
+    {ok, Resp2} = send_announce_tcp(orddict:to_list(Ann1)),
+    {ok, Resp3} = send_announce_udp(orddict:to_list(Ann2)),
+    ?debugVal(etracker_db:torrent_peers(IH, 50)),
+    ?debugVal(Resp3),
+    GenF1 = fun (R) ->
+                    Peers = proplists:get_value(<<"peers">>, R),
+                    [
+                     ?_assertEqual(2, proplists:get_value(<<"incomplete">>, R)),
+                     ?_assertEqual(0, proplists:get_value(<<"complete">>, R)),
+                     ?_assertMatch([_], Peers),
+                     [?_assertEqual({K, proplists:get_value(K, lists:nth(1, Peers))}, {K, V})
+                      || {K, V} <- [{<<"ip">>,<<"127.0.0.1">>},
+                                    {<<"peer_id">>, PeerId},
+                                    {<<"port">>, Port}]
+                     ]
+                    ]
+            end,
+    GenF2 = fun (R) ->
+                    Peers = proplists:get_value(<<"peers">>, R),
+                    [
+                     ?_assertEqual(2, proplists:get_value(<<"incomplete">>, R)),
+                     ?_assertEqual(0, proplists:get_value(<<"complete">>, R)),
+                     ?_assertMatch([_], Peers),
+                     [?_assertEqual({K, proplists:get_value(K, lists:nth(1, Peers))}, {K, V})
+                      || {K, V} <- [{<<"ip">>, {127, 0, 0, 1}},
+                                    {<<"port">>, Port}]
+                     ]
+                    ]
+            end,
 
-check_stats(KV) ->
-    {ok, {{200, _}, _, Resp}} = lhttpc:request("http://localhost:8080/stats", get,
-                                               [{"Content-Type", "application/json"}], "", 1000),
+    [GenF1(Resp1), GenF1(Resp2), GenF2(Resp3)].
 
-    Res = jiffy:decode(Resp),
-    ?debugVal(Res),
-    {[{<<"value">>, {KV2}}]} = Res,
-    [?_assertMatch({[{<<"value">>, _}]}, Res),
-     [?_assertEqual({K, V}, {K, proplists:get_value(K, KV2)}) || {K, V} <- KV]
-    ].
+seeder_first_started(Ann) ->
+    [_Ih, _PeerId, Port] = [orddict:fetch(K, Ann) || K <- [info_hash, peer_id, port]],
+    PeerId = random_string(20),
+    ets:insert(?PEERS, {seeder_first, PeerId, Port}),
+    Ann1 = lists:foldl(fun ({K, V}, D) -> orddict:store(K, V, D) end,
+                       Ann, [{peer_id, PeerId}, {left, 0}, {event, started}, {compact, 0}]),
+    {ok, Resp1} = send_announce_tcp(orddict:to_list(Ann1)),
+    {ok, Resp2} = send_announce_tcp(orddict:to_list(Ann1)),
+
+    Ann2 = lists:foldl(fun ({K, V}, D) -> orddict:store(K, V, D) end,
+                       Ann, [{peer_id, PeerId}, {left, 0}, {event, completed}, {compact, 0}]),
+    {ok, Resp3} = send_announce_tcp(orddict:to_list(Ann2)),
+    {ok, Resp4} = send_announce_tcp(orddict:to_list(Ann2)),
+
+    GenF = fun (R) ->
+                   Peers = proplists:get_value(<<"peers">>, R),
+                   [
+                    ?_assertEqual(proplists:get_value(<<"incomplete">>, R), 2),
+                    ?_assertEqual(proplists:get_value(<<"complete">>, R), 1),
+                    ?_assertMatch([_, _], Peers)
+                   ]
+           end,
+    [GenF(Resp1), GenF(Resp2), GenF(Resp3), GenF(Resp4)].
 
 leecher_first_completed(Ann) ->
     [{_, PeerId1, Port1}] = ets:lookup(?PEERS, leecher_second),
@@ -216,17 +233,17 @@ leecher_first_completed(Ann) ->
 
     Ann1 = lists:foldl(fun ({K, V}, D) -> orddict:store(K, V, D) end,
                        Ann, [{left, 0}, {event, completed}, {compact, 0}]),
-    {ok, Resp1} = send_announce(orddict:to_list(Ann1)),
-    {ok, Resp2} = send_announce(orddict:to_list(Ann1)),
+    {ok, Resp1} = send_announce_tcp(orddict:to_list(Ann1)),
+    {ok, Resp2} = send_announce_tcp(orddict:to_list(Ann1)),
 
     Ann2 = lists:foldl(fun ({K, V}, D) -> orddict:store(K, V, D) end,
                        Ann, [{left, 0}, {event, ""}, {compact, 1}]),
-    {ok, Resp3} = send_announce(orddict:to_list(Ann2)),
+    {ok, Resp3} = send_announce_tcp(orddict:to_list(Ann2)),
 
     Ann3 = lists:foldl(fun ({K, V}, D) -> orddict:store(K, V, D) end,
                        Ann, [{left, 0}, {event, stopped}, {compact, 0}]),
-    {ok, Resp4} = send_announce(orddict:to_list(Ann3)),
-    {ok, Resp5} = send_announce(orddict:to_list(Ann3)),
+    {ok, Resp4} = send_announce_tcp(orddict:to_list(Ann3)),
+    {ok, Resp5} = send_announce_tcp(orddict:to_list(Ann3)),
 
     Checks1 = [{<<"incomplete">>, 1}, {<<"complete">>, 2}],
     Checks2 = [{<<"incomplete">>, 1}, {<<"complete">>, 2}],
@@ -236,11 +253,13 @@ leecher_first_completed(Ann) ->
                     Peers = proplists:get_value(<<"peers">>, R),
                     PeersIds = lists:filter(
                                  fun (P) ->
-                                         PI = binary_to_list(proplists:get_value(<<"peer_id">>, P)),
+                                         PI = proplists:get_value(<<"peer_id">>, P),
                                          lists:member(PI, [PeerId1, PeerId2])
                                  end, Peers),
-                    [?_assertMatch([_, _], Peers), ?_assertEqual(length(PeersIds), 2) |
-                     [?_assertEqual(proplists:get_value(K, R), V) || {K, V} <- Checks]]
+                    [?_assertMatch([_, _], Peers),
+                     ?_assertEqual(length(PeersIds), 2) |
+                     [?_assertEqual(proplists:get_value(K, R), V) || {K, V} <- Checks]
+                    ]
             end,
     GenF2 = fun (R, Checks) ->
                     Peers = decode_compact_peers(proplists:get_value(<<"peers">>, R)),
@@ -256,31 +275,6 @@ leecher_first_completed(Ann) ->
 
     [GenF1(Resp1, Checks1), GenF1(Resp2, Checks1), GenF2(Resp3, Checks2), GenF1(Resp4, Checks3), GenF1(Resp5, Checks3)].
 
-leecher_second_started(Ann) ->
-    [IH, PeerId, Port] = [orddict:fetch(K, Ann) || K <- [info_hash, peer_id, port]],
-    PeerId1 = random_string(20),
-    ets:insert(?PEERS, {leecher_second, PeerId1, Port}),
-    Ann1 = lists:foldl(fun ({K, V}, D) -> orddict:store(K, V, D) end,
-                       Ann, [{peer_id, PeerId1}, {left, 456}, {event, started}, {compact, 0}]),
-    {ok, Resp1} = send_announce(orddict:to_list(Ann1)),
-    {ok, Resp2} = send_announce(orddict:to_list(Ann1)),
-
-    ?debugVal(etracker_db:torrent_peers(IH, 50)),
-    GenF = fun (R) ->
-                   Peers = proplists:get_value(<<"peers">>, R),
-                   [
-                    ?_assertEqual(2, proplists:get_value(<<"incomplete">>, R)),
-                    ?_assertEqual(0, proplists:get_value(<<"complete">>, R)),
-                    ?_assertMatch([_], Peers),
-                    [?_assertEqual(proplists:get_value(K, lists:nth(1, Peers)), V)
-                     || {K, V} <- [{<<"ip">>,<<"127.0.0.1">>},
-                                   {<<"peer_id">>,list_to_binary(PeerId)},
-                                   {<<"port">>, Port}]
-                    ]
-                   ]
-           end,
-    [GenF(Resp1), GenF(Resp2)].
-
 leecher_second_stopped(Ann) ->
     [{_, PeerId1, _}] = ets:lookup(?PEERS, leecher_second),
     [{_, PeerId2, _}] = ets:lookup(?PEERS, seeder_first),
@@ -288,46 +282,58 @@ leecher_second_stopped(Ann) ->
     Ann1 = lists:foldl(fun ({K, V}, D) -> orddict:store(K, V, D) end,
                        Ann, [{left, 0}, {peer_id, PeerId1}, {event, stopped}, {compact, 0}]),
 
-    {ok, Resp1} = send_announce(orddict:to_list(Ann1)),
-    {ok, Resp2} = send_announce(orddict:to_list(Ann1)),
+    {ok, Resp1} = send_announce_tcp(orddict:to_list(Ann1)),
+    {ok, Resp2} = send_announce_tcp(orddict:to_list(Ann1)),
 
     Checks1 = [{<<"incomplete">>, 0}, {<<"complete">>, 1}],
 
-    GenF = fun (R, Checks) ->
-                   Peers = proplists:get_value(<<"peers">>, R),
-                   PeersIds = lists:filter(
-                                fun (P) ->
-                                        PI = binary_to_list(proplists:get_value(<<"peer_id">>, P)),
-                                        lists:member(PI, [PeerId2])
-                                end, Peers),
-                   [?_assertMatch([_], Peers), ?_assertEqual(length(PeersIds), 1) |
-                    [?_assertEqual(proplists:get_value(K, R), V) || {K, V} <- Checks]]
-           end,
-    [GenF(Resp1, Checks1), GenF(Resp2, Checks1)].
+    GenF1 = fun (R, Checks) ->
+                    Peers = proplists:get_value(<<"peers">>, R),
+                    PeersIds = lists:filter(
+                                 fun (P) ->
+                                         PI = proplists:get_value(<<"peer_id">>, P),
+                                         lists:member(PI, [PeerId2])
+                                 end, Peers),
+                    [?_assertMatch([_], Peers), ?_assertEqual(length(PeersIds), 1) |
+                     [?_assertEqual(proplists:get_value(K, R), V) || {K, V} <- Checks]]
+            end,
+    [GenF1(Resp1, Checks1), GenF1(Resp2, Checks1)].
 
-seeder_first_started(Ann) ->
-    [_Ih, _PeerId, Port] = [orddict:fetch(K, Ann) || K <- [info_hash, peer_id, port]],
-    PeerId = random_string(20),
-    ets:insert(?PEERS, {seeder_first, PeerId, Port}),
-    Ann1 = lists:foldl(fun ({K, V}, D) -> orddict:store(K, V, D) end,
-                       Ann, [{peer_id, PeerId}, {left, 0}, {event, started}, {compact, 0}]),
-    {ok, Resp1} = send_announce(orddict:to_list(Ann1)),
-    {ok, Resp2} = send_announce(orddict:to_list(Ann1)),
+check_stats_after_clean() ->
+    KV = [{<<"seeders">>, 0},
+          {<<"leechers">>, 0},
+          {<<"peers">>, 0},
+          {<<"unknown_queries">>, 0},
+          {<<"invalid_queries">>, 0},
+          {<<"scrapes">>, 0},
+          {<<"announces">>, 0},
+          {<<"failed_queries">>, 0},
+          {<<"deleted_peers">>, 3}],
+    check_stats(KV).
 
-    Ann2 = lists:foldl(fun ({K, V}, D) -> orddict:store(K, V, D) end,
-                       Ann, [{peer_id, PeerId}, {left, 0}, {event, completed}, {compact, 0}]),
-    {ok, Resp3} = send_announce(orddict:to_list(Ann2)),
-    {ok, Resp4} = send_announce(orddict:to_list(Ann2)),
+check_stats_after_test(_) ->
+    KV = [{<<"seeders">>, 1},
+          {<<"leechers">>, 0},
+          {<<"peers">>, 1},
+          {<<"unknown_queries">>, 0},
+          {<<"invalid_queries">>, 2},
+          {<<"scrapes">>, 2},
+          {<<"announces">>, 17},
+          {<<"udp_connections">>, 2},
+          {<<"failed_queries">>, 1},
+          {<<"deleted_peers">>, 0}],
+    check_stats(KV).
 
-    GenF = fun (R) ->
-                   Peers = proplists:get_value(<<"peers">>, R),
-                   [
-                    ?_assertEqual(proplists:get_value(<<"incomplete">>, R), 2),
-                    ?_assertEqual(proplists:get_value(<<"complete">>, R), 1),
-                    ?_assertMatch([_, _], Peers)
-                   ]
-           end,
-    [GenF(Resp1), GenF(Resp2), GenF(Resp3), GenF(Resp4)].
+check_stats(KV) ->
+    {ok, {{200, _}, _, Resp}} = lhttpc:request("http://localhost:8080/stats", get,
+                                               [{"Content-Type", "application/json"}], "", 1000),
+
+    Res = jiffy:decode(Resp),
+    ?debugVal(Res),
+    {[{<<"value">>, {KV2}}]} = Res,
+    [?_assertMatch({[{<<"value">>, _}]}, Res),
+     [?_assertEqual({K, V}, {K, proplists:get_value(K, KV2)}) || {K, V} <- KV]
+    ].
 
 scrape_all(_Ann) ->
     {ok, Resp} = send_scrape([]),
@@ -363,8 +369,11 @@ scrape_some(_Ann) ->
            end,
     [GenF(Resp)].
 
-send_announce(PL) ->
+send_announce_tcp(PL) ->
     contact_tracker_http(announce, ?TRACKER_URL, PL).
+
+send_announce_udp(PL) ->
+    contact_tracker_udp(announce, ?TRACKER_PEER, PL).
 
 send_scrape(PL) ->
     contact_tracker_http(scrape, ?TRACKER_URL, PL).
@@ -377,8 +386,30 @@ random_announce() ->
      {port, 12345},
      {uploaded, random:uniform(10000000000)},
      {downloaded, random:uniform(10000000000)},
-     {left, random:uniform(10000000000)}
+     {left, random:uniform(10000000000)},
+     {key, random:uniform(16#ffff)}
     ].
+
+contact_tracker_udp(announce, TrackerPeer, PL) ->
+    TransReqF = fun (downloaded, V) -> {down, V};
+                    (uploaded, V) -> {up, V};
+                    (event, "") -> {event, none};
+                    (event, V) -> {event, V};
+                    (compact, _V) -> undefined;
+                    (K, V) -> {K, V}
+                end,
+    TransAnsF = fun (leechers, V) -> {<<"incomplete">>, V};
+                    (seeders, V) -> {<<"complete">>, V};
+                    (K, V) -> {list_to_binary(atom_to_list(K)), V}
+                end,
+    PL1 = [V || V <- [TransReqF(K, V) || {K, V} <- PL], V /= undefined],
+    case etorrent_udp_tracker_mgr:announce(TrackerPeer, PL1, 5000) of
+        {ok, {announce, Peers, Info}} ->
+            {ok, [{<<"peers">>, [[{<<"ip">>, IP}, {<<"port">>, Port}] || {IP, Port} <- Peers]}
+                  |[TransAnsF(K, V) || {K, V} <- Info]]};
+        Error ->
+            Error
+    end.
 
 contact_tracker_http(Request, Url, PL) ->
     RequestStr = atom_to_list(Request),
@@ -449,7 +480,7 @@ random_string(Len) ->
     Chrs = list_to_tuple("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"),
     ChrsSize = size(Chrs),
     F = fun(_, R) -> [element(random:uniform(ChrsSize), Chrs) | R] end,
-    lists:foldl(F, "", lists:seq(1, Len)).
+    list_to_binary(lists:foldl(F, "", lists:seq(1, Len))).
 
 decode_compact_peers(Peers) ->
     decode_compact_peers(Peers, []).
@@ -472,12 +503,7 @@ all_torrent_info_hashes() ->
         etracker_ets ->
             ets:select(torrent_info, ets:fun2ms(fun (#torrent_info{info_hash=IH}) ->
                                                         IH
-                                                end));
-        etracker_hanoidb ->
-            etracker_db:torrent_infos([],
-                                      fun (TI) ->
-                                              [IH || #torrent_info{info_hash=IH} <- TI]
-                                      end)
+                                                end))
     end.
 
 write_record(Rec) ->
@@ -499,3 +525,12 @@ delete_record(Rec) ->
         _ ->
             etracker_db:db_call({delete, Rec})
     end.
+
+now_to_timestamp(Time) ->
+    calendar:now_to_local_time(Time).
+
+timestamp_to_now({D, {HH, MM, SSMS}}) ->
+    SS = erlang:trunc(SSMS),
+    Seconds = calendar:datetime_to_gregorian_seconds({D, {HH, MM, SS}}) - 62167219200,
+    %% 62167219200 == calendar:datetime_to_gregorian_seconds({{1970, 1, 1}, {0, 0, 0}})
+    {Seconds div 1000000, Seconds rem 1000000, erlang:trunc((SSMS - SS) * 1000000)}.

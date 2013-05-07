@@ -39,6 +39,7 @@ stop(Pid) ->
 %%%===================================================================
 
 init(Opts) ->
+    process_flag(trap_exit, true),
     random:seed(erlang:now()),
     Hostname = proplists:get_value(hostname, Opts),
     Database = proplists:get_value(database, Opts),
@@ -137,15 +138,9 @@ handle_call(_Request, _From, State) ->
     Reply = {error, invalid_request},
     {reply, Reply, State}.
 
-handle_cast(stop, State) ->
-    {stop, shutdown, State};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info(stop, State) ->
-    {stop, shutdown, State};
-handle_info({'EXIT', _, _}, State) ->
-    {stop, shutdown, State};
 handle_info(_Info, State) ->
     {noreply, State}.
 
