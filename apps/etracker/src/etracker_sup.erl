@@ -25,7 +25,7 @@ start_link() ->
 %% ===================================================================
 
 init([]) ->
-    DbMgr = ?CHILD_TIMEOUT(etracker_db_mgr, worker, 300000),
+    DbMgr = ?CHILD_TIMEOUT(etracker_db_mgr, worker, 1800000),
     DbPool = ?CHILD(etracker_db, worker),
     DbCache = ?CHILD(etracker_db_cache, worker),
     HttpSrv = ?CHILD(etracker_http_srv, worker),

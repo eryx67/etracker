@@ -60,24 +60,37 @@ handle_call({torrent_infos, [], Callback}, _From, State) ->
     process_torrent_infos_all(Callback, State),
     {reply, ok, State};
 handle_call({torrent_infos, InfoHashes, Callback}, _From, State) ->
-    Callback(lists:foldl(
-               fun (IH, Acc) ->
-                       case read_torrent_info(IH, State) of
-                           #torrent_info{info_hash=undefined} ->
-                               Acc;
-                           TI ->
-                               [TI|Acc]
-                       end
-               end, [], InfoHashes)),
-    {reply, ok, State};
+    Data = lists:map(fun (IH) ->
+                             case read_torrent_info(IH, State) of
+                                 #torrent_info{info_hash=undefined} ->
+                                     undefined;
+                                 TI ->
+                                     TI
+                             end
+                     end, InfoHashes),
+    Ret = Callback(Data),
+    {reply, Ret, State};
 handle_call({torrent_peers, InfoHash, Wanted}, _From, State) ->
     Peers =  process_torrent_peers(InfoHash, Wanted, State),
     {reply, Peers, State};
-handle_call({expire_torrent_peers, ExpireTime}, _From, State) ->
+handle_call({expire, torrent_user, ExpireTime}, _From, State) ->
     Reply = process_expire_torrent_peers(ExpireTime, State),
+    {reply, Reply, State};
+handle_call({expire, udp_connection_info, ExpireTime}, _From, State) ->
+    Reply = process_expire_udp_connections(ExpireTime, State),
     {reply, Reply, State};
 handle_call({system_info, torrents}, _From, S=#state{connection=C, statements=Ss}) ->
     {ok, Cnt} = exec_statement(C, torrent_info_count_all, [], Ss),
+    {reply, Cnt, S};
+handle_call({system_info, seederless_torrents, Period},
+            _From, S=#state{connection=C, statements=Ss}) ->
+    FromTime = now_to_timestamp(now_sub_sec(now(), Period)),
+    {ok, Cnt} = exec_statement(C, torrent_info_seederless_count, [FromTime], Ss),
+    {reply, Cnt, S};
+handle_call({system_info, peerless_torrents, Period},
+            _From, S=#state{connection=C, statements=Ss}) ->
+    FromTime = now_to_timestamp(now_sub_sec(now(), Period)),
+    {ok, Cnt} = exec_statement(C, torrent_info_peerless_count, [FromTime], Ss),
     {reply, Cnt, S};
 handle_call({system_info, peers}, _From, S=#state{connection=C, statements=Ss} ) ->
     {ok, Cnt} = exec_statement(C, peers_count_all, [], Ss),
@@ -123,6 +136,29 @@ handle_call({write, _TU=#torrent_user{id={IH, PeerId},
             ok
     end,
     {reply, ok, S};
+handle_call({write, _CI=#udp_connection_info{id=Id}},
+            _From, S=#state{connection=C, statements=Ss}) ->
+    MT = now_to_timestamp(now()),
+    Args = [Id, MT],
+    case exec_statement(C, update_udp_connection_info, Args, Ss) of
+        {ok, 0} ->
+            exec_statement(C, insert_udp_connection_info, Args, Ss);
+        {ok, 1} ->
+            ok
+    end,
+    {reply, ok, S};
+handle_call({member, Tbl, Key}, _From, S=#state{connection=C, statements=Ss}) ->
+    {Args, Stmt} = case Tbl of
+                       torrent_info ->
+                           {[Key], torrent_info_exists};
+                       torrent_user ->
+                           {IH, PeerId} = Key,
+                           {[IH, PeerId], torrent_user_exists};
+                       udp_connection_info ->
+                           {[Key], udp_connection_info_exists}
+                   end,
+    {ok, Ret} = exec_statement(C, Stmt, Args, Ss),
+    {reply, Ret, S};
 handle_call({delete, _TI=#torrent_info{info_hash=InfoHash}},
             _From, S=#state{connection=C, statements=Ss}) ->
     {ok, Cnt} = exec_statement(C, delete_torrent_info, [InfoHash], Ss),
@@ -156,15 +192,15 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 setup(State=#state{connection=_C, statements=Ss}) ->
     RowToTorrentInfoF = fun ({InfoHash, Leechers, Seeders, Completed, Name, Mtime, Ctime}) ->
-                             #torrent_info{
-                              info_hash=InfoHash,
-                              leechers=Leechers,
-                              seeders=Seeders,
-                              completed=Completed,
-                              name=Name,
-                              mtime=timestamp_to_now(Mtime),
-                              ctime=timestamp_to_now(Ctime)
-                             }
+                                #torrent_info{
+                                   info_hash=InfoHash,
+                                   leechers=Leechers,
+                                   seeders=Seeders,
+                                   completed=Completed,
+                                   name=Name,
+                                   mtime=timestamp_to_now(Mtime),
+                                   ctime=timestamp_to_now(Ctime)
+                                  }
                         end,
     RowToTorrentUserF = fun ({InfoHash, PeerId, Address, Port,
                               Uploaded, Downloaded, Left, Event,
@@ -186,20 +222,41 @@ setup(State=#state{connection=_C, statements=Ss}) ->
                            undefined
                    end,
     TorrentUsersF = fun (Rows, _Cnt) ->
-                           [RowToTorrentUserF(Row) || Row <- Rows]
-                   end,
+                            [RowToTorrentUserF(Row) || Row <- Rows]
+                    end,
     TorrentInfosF = fun (Rows, _Cnt) ->
-                           [RowToTorrentInfoF(Row) || Row <- Rows]
+                            [RowToTorrentInfoF(Row) || Row <- Rows]
                     end,
     CountF = fun ([{Cnt}], _Cnt) ->
-                                 Cnt
-                         end,
+                     Cnt
+             end,
     TorrentPeersF = fun (Rows, _Cnt) ->
                             [{PeerId, {address_to_erl(Address), Port}}
                              || {PeerId, Address, Port} <- Rows]
                     end,
+    MemberF = fun (_, 0) ->
+                      false;
+                  (_, _) ->
+                       true
+              end,
     Queries =
-        [{torrent_info,
+        [
+         {torrent_info_exists,
+          "select 1 from torrent_info where info_hash = $1",
+          [bytea],
+          MemberF
+         },
+         {torrent_user_exists,
+          "select 1 from torrent_user where info_hash = $1 and peer_id = $2",
+          [bytea, bytea],
+          MemberF
+         },
+         {udp_connection_info_exists,
+          "select 1 from udp_connection_info where id = $1",
+          [bytea, bytea],
+          MemberF
+         },
+         {torrent_info,
           "select info_hash, leechers, seeders, completed, name, mtime, ctime"
           " from torrent_info where info_hash = $1",
           [bytea],
@@ -212,26 +269,26 @@ setup(State=#state{connection=_C, statements=Ss}) ->
           TorrentInfosF
          },
          {torrent_peers_seeders_count,
-         "select count(*) from torrent_user"
+          "select count(*) from torrent_user"
           " where info_hash = $1 and finished = true and event != 'stopped'",
           [bytea],
           CountF
          },
          {torrent_peers_leechers_count,
-         "select count(*) from torrent_user"
+          "select count(*) from torrent_user"
           " where info_hash = $1 and finished = false and event != 'stopped'",
           [bytea],
           CountF
          },
          {torrent_peers_seeders,
-         "select peer_id, address, port from torrent_user"
+          "select peer_id, address, port from torrent_user"
           " where info_hash = $1 and finished = true and event != 'stopped'"
           " offset $2 limit $3",
           [bytea, int4, int4],
           TorrentPeersF
          },
          {torrent_peers_leechers,
-         "select peer_id, address, port from torrent_user"
+          "select peer_id, address, port from torrent_user"
           " where info_hash = $1 and finished = false and event != 'stopped'"
           " offset $2 limit $3",
           [bytea, int4, int4],
@@ -254,6 +311,11 @@ setup(State=#state{connection=_C, statements=Ss}) ->
           [timestamp],
           fun (Cnt) -> Cnt end
          },
+         {delete_expired_udp_connections,
+          "delete from udp_connection_info where mtime < $1",
+          [timestamp],
+          fun (Cnt) -> Cnt end
+         },
          {delete_peer,
           "delete from torrent_user where info_hash = $1 and peer_id = $2",
           [bytea, bytea],
@@ -272,6 +334,19 @@ setup(State=#state{connection=_C, statements=Ss}) ->
           " values($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
           [bytea, bytea, int2array, int4, int4, int4, int4, varchar, bool, timestamp],
           fun (Cnt) -> Cnt end
+         },
+         {udp_connections_count_all,
+          "select count(*) from udp_connection_info",
+          [],
+          CountF
+         },
+         {update_udp_connection_info,
+          "update udp_connection_info set mtime = $2 where id = $1",
+          [bytea, timestamp]
+         },
+         {insert_udp_connection_info,
+          "insert into udp_connection_info(id, mtime) values($1, $2)",
+          [bytea, timestamp]
          },
          {peers_count_all,
           "select count(*) from torrent_user",
@@ -317,7 +392,19 @@ setup(State=#state{connection=_C, statements=Ss}) ->
           [],
           CountF
          },
-         % for tests
+         {torrent_info_seederless_count,
+          "select count(*) from torrent_info"
+          " where mtime > $1 and seeders = 0",
+          [timestamp],
+          CountF
+         },
+         {torrent_info_peerless_count,
+          "select count(*) from torrent_info"
+          " where mtime > $1 and seeders = 0 and leechers = 0",
+          [timestamp],
+          CountF
+         },
+                                                % for tests
          {torrent_info_hashes_all,
           "select info_hash from torrent_info",
           [],
@@ -329,6 +416,10 @@ setup(State=#state{connection=_C, statements=Ss}) ->
                       end, Ss, Queries),
     State#state{statements=Ss1}.
 
+process_expire_udp_connections(ExpireTime,#state{connection=C, statements=Ss}) ->
+    {ok, Cnt} = exec_statement(C, delete_expired_udp_connections,
+                               [now_to_timestamp(ExpireTime)], Ss),
+    Cnt.
 process_expire_torrent_peers(ExpireTime,#state{connection=C, statements=Ss}) ->
     {ok, Cnt} = exec_statement(C, delete_expired_peers,
                                [now_to_timestamp(ExpireTime)], Ss),
@@ -344,10 +435,10 @@ process_torrent_peers(InfoHash, Wanted, State=#state{connection=C, statements=Ss
     {SeedersCnt, LeechersCnt, Seeders ++ Leechers}.
 
 process_announce(_A=#announce{
-                      event=Evt,
-                      info_hash=InfoHash, peer_id=PeerId, ip=IP, port=Port,
-                      uploaded=Upl, downloaded=Dld, left=Left
-                     }, State) ->
+                       event=Evt,
+                       info_hash=InfoHash, peer_id=PeerId, ip=IP, port=Port,
+                       uploaded=Upl, downloaded=Dld, left=Left
+                      }, State) ->
     Finished = Left == 0,
     case Evt of
         <<"stopped">> ->
@@ -428,14 +519,14 @@ read_torrent_leechers(InfoHash, Available, Wanted, #state{connection=C, statemen
                      random:uniform(Available - Wanted)
              end,
     {ok, Leechers} = exec_statement(C, torrent_peers_leechers,
-                                   [InfoHash, Offset, Wanted], Ss),
+                                    [InfoHash, Offset, Wanted], Ss),
     Leechers.
 
 delete_peer(InfoHash, PeerId, #state{connection=C, statements=Ss}) ->
     exec_statement(C, delete_peer, [InfoHash, PeerId], Ss).
 
 write_peer(InfoHash, PeerId, IP, Port, Upl, Dld, Left, Event, Finished,
-          #state{connection=C, statements=Ss}) ->
+           #state{connection=C, statements=Ss}) ->
     MT = now_to_timestamp(now()),
     Address = address_from_erl(IP),
     Args = [InfoHash, PeerId, Address, Port, Upl, Dld, Left, Event, Finished, MT],
@@ -521,3 +612,22 @@ timestamp_to_now({D, {HH, MM, SSMS}}) ->
     Seconds = calendar:datetime_to_gregorian_seconds({D, {HH, MM, SS}}) - 62167219200,
     %% 62167219200 == calendar:datetime_to_gregorian_seconds({{1970, 1, 1}, {0, 0, 0}})
     {Seconds div 1000000, Seconds rem 1000000, erlang:trunc((SSMS - SS) * 1000000)}.
+
+now_sub_sec(Now, Seconds) ->
+    {Mega, Sec, Micro} = Now,
+    SubMega = Seconds div 1000000,
+    SubSec = Seconds rem 1000000,
+    Mega1 = Mega - SubMega,
+    Sec1 = Sec - SubSec,
+    {Mega2, Sec2} = if Mega1 < 0 ->
+                            exit(badarg);
+                       (Sec1 < 0) ->
+                            {Mega1 - 1, 1000000 + Sec1};
+                       true ->
+                            {Mega1, Sec1}
+                    end,
+    if (Mega2 < 0) ->
+            exit(badarg);
+       true ->
+            {Mega2, Sec2, Micro}
+    end.

@@ -19,6 +19,8 @@
 -define(INFO_TBL, etracker_info).
 
 -define(INFO_DB_KEYS, [torrents,
+                       seederless_torrents,
+                       peerless_torrents,
                        seeders,
                        leechers,
                        peers
@@ -115,8 +117,8 @@ full_scrape(FileName, EncodeFun) ->
                                     {error, Reason}
                             end
                     end;
-                FN ->
-                    {ok, FN}
+                Res ->
+                    Res
             end
     end.
 
@@ -146,9 +148,17 @@ system_info() ->
 
 system_info(info_keys) -> ?INFO_KEYS;
 system_info(Key) when Key == seeders
-                      orelse Key == leechers ->
+                      orelse Key == leechers
+                      orelse Key == seederless_torrents
+                      orelse Key == peerless_torrents ->
     CacheTTL = confval(db_cache_peers_ttl, 0),
-    Req = CacheKey = {system_info, Key},
+    CacheKey = {system_info, Key},
+    Req = if (Key == leechers) orelse (Key == seeders) ->
+                  CacheKey;
+             true ->
+                  Period = etracker_env:get(answer_interval, 1800) * 2,
+                  {system_info, Key, Period}
+          end,
     case CacheTTL of
         0 ->
             db_call(Req, infinity);
@@ -171,8 +181,8 @@ system_info(Key) when Key == announces
                       orelse Key == failed_queries
                       orelse Key == invalid_queries
                       orelse Key == deleted_peers
-                      orelse Key == udp_connections
-                      orelse Key == udp_deleted_connections ->
+                      orelse Key == udp_deleted_connections
+                      orelse Key == udp_connections ->
     case ets:lookup(?INFO_TBL, Key) of
         [{_, Val}] ->
             Val;
@@ -188,8 +198,8 @@ system_info_update_counter(Key, Inc) when Key == announces
                                           orelse Key == failed_queries
                                           orelse Key == invalid_queries
                                           orelse Key == deleted_peers
-                                          orelse Key == udp_connections
-                                          orelse Key == udp_deleted_connections->
+                                          orelse Key == udp_deleted_connections
+                                          orelse Key == udp_connections ->
     ets:update_counter(?INFO_TBL, Key, Inc).
 
 import(MgrModule, DbModule, MgrParams, DbParams) ->

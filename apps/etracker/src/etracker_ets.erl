@@ -66,6 +66,12 @@ handle_call({expire, udp_connection_info, ExpireTime}, _From, S) ->
     {reply, Ret, S};
 handle_call({system_info, torrents}, _From, State) ->
     {reply, ets:info(torrent_info, size), State};
+handle_call({system_info, seederless_torrents, Period}, _From, State) ->
+    Reply = count_seederless_torrents(Period),
+    {reply, Reply, State};
+handle_call({system_info, peerless_torrents, Period}, _From, State) ->
+    Reply = count_peerless_torrents(Period),
+    {reply, Reply, State};
 handle_call({system_info, peers}, _From, State) ->
     {reply, ets:info(torrent_user, size), State};
 handle_call({system_info, seeders}, _From, State=#state{db_type=dict}) ->
@@ -162,6 +168,25 @@ process_torrent_infos1({Data, Cont}, Callback) ->
     process_torrent_infos1(ets:select(Cont), Callback);
 process_torrent_infos1('$end_of_table', _Callback) ->
     ok.
+
+count_seederless_torrents(Period) ->
+    FromTime = now_sub_sec(now(), Period),
+    CntQ = ets:fun2ms(fun(#torrent_info{mtime=MT, seeders=S})
+                            when MT > FromTime,
+                                 S == 0 ->
+                            true
+                    end),
+    ets:select_count(torrent_info, CntQ).
+
+count_peerless_torrents(Period) ->
+    FromTime = now_sub_sec(now(), Period),
+    CntQ = ets:fun2ms(fun(#torrent_info{mtime=MT, seeders=S, leechers=L})
+                            when MT > FromTime,
+                                 S == 0,
+                                 L == 0 ->
+                            true
+                    end),
+    ets:select_count(torrent_info, CntQ).
 
 process_torrent_peers(dict, InfoHash, Wanted) ->
     Ret = {SeedersCnt, LeechersCnt, _Peers} =
@@ -294,3 +319,22 @@ delete_torrent_user(ets, Id) ->
     ets:delete(torrent_user, Id),
     ets:delete(torrent_seeder, Id),
     ets:delete(torrent_leecher, Id).
+
+now_sub_sec(Now, Seconds) ->
+    {Mega, Sec, Micro} = Now,
+    SubMega = Seconds div 1000000,
+    SubSec = Seconds rem 1000000,
+    Mega1 = Mega - SubMega,
+    Sec1 = Sec - SubSec,
+    {Mega2, Sec2} = if Mega1 < 0 ->
+                            exit(badarg);
+                       (Sec1 < 0) ->
+                            {Mega1 - 1, 1000000 + Sec1};
+                       true ->
+                            {Mega1, Sec1}
+                    end,
+    if (Mega2 < 0) ->
+            exit(badarg);
+       true ->
+            {Mega2, Sec2, Micro}
+    end.

@@ -32,6 +32,7 @@ content_types_provided(Req, S=#state{request_type=stats}) ->
             ],
     {Types, Req, S}.
 
+%% rest handlers
 stats_reply_json(Req, State) ->
     {Answer, Req1} = stats_process(json, Req),
     Resp = jiffy:encode(Answer),
@@ -350,7 +351,7 @@ request_attr_value(Attr, Val) when Attr == port
 request_attr_value(_Attr=no_peer_id, Val) ->
     Val /= undefined;
 request_attr_value(_Attr=event, _Val= <<"paused">>) ->
-    <<"">>;
+    <<"stopped">>;
 request_attr_value(_Attr, Val) ->
     Val.
 
