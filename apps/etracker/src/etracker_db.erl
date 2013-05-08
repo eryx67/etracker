@@ -29,6 +29,7 @@
 
 -define(INFO_COUNTERS, [announces,
                         scrapes,
+                        full_scrapes,
                         invalid_queries,
                         failed_queries,
                         unknown_queries,
@@ -180,6 +181,7 @@ system_info(Key) when Key == torrents
     db_call({system_info, Key});
 system_info(Key) when Key == announces
                       orelse Key == scrapes
+                      orelse Key == full_scrapes
                       orelse Key == unknown_queries
                       orelse Key == failed_queries
                       orelse Key == invalid_queries
@@ -197,6 +199,7 @@ system_info(Key) ->
 
 system_info_update_counter(Key, Inc) when Key == announces
                                           orelse Key == scrapes
+                                          orelse Key == full_scrapes
                                           orelse Key == unknown_queries
                                           orelse Key == failed_queries
                                           orelse Key == invalid_queries

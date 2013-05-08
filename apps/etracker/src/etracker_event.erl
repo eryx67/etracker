@@ -100,8 +100,16 @@ handle_event({announce, #announce{protocol=Proto}}, State)->
             ok
     end,
     {ok, State};
-handle_event({scrape, #scrape{protocol=Proto}}, State)->
+handle_event({scrape, #scrape{info_hashes=IHs, protocol=Proto}}, State)->
     etracker_db:system_info_update_counter(scrapes, 1),
+
+    case IHs of
+        [] ->
+            etracker_db:system_info_update_counter(full_scrapes, 1);
+        _ ->
+            ok
+    end,
+
     case Proto of
         udp ->
             etracker_db:system_info_update_counter(udp_connections, 1);
