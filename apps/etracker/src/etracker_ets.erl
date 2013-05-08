@@ -52,8 +52,8 @@ handle_call({torrent_info, InfoHash}, _From, State) when is_binary(InfoHash) ->
 		[TI] ->
 			{reply, TI, State}
 	end;
-handle_call({torrent_infos, InfoHashes, Callback}, _From, State) when is_list(InfoHashes) ->
-    Ret = process_torrent_infos(InfoHashes, Callback),
+handle_call({torrent_infos, InfoHashes, Period, Callback}, _From, State) when is_list(InfoHashes) ->
+    Ret = process_torrent_infos(InfoHashes, Period, Callback),
     {reply, Ret, State};
 handle_call({torrent_peers, InfoHash, Wanted}, _From, S=#state{db_type=DT}) ->
     Ret = process_torrent_peers(DT, InfoHash, Wanted),
@@ -66,6 +66,9 @@ handle_call({expire, udp_connection_info, ExpireTime}, _From, S) ->
     {reply, Ret, S};
 handle_call({system_info, torrents}, _From, State) ->
     {reply, ets:info(torrent_info, size), State};
+handle_call({system_info, alive_torrents, Period}, _From, State) ->
+    Reply = count_alive_torrents(Period),
+    {reply, Reply, State};
 handle_call({system_info, seederless_torrents, Period}, _From, State) ->
     Reply = count_seederless_torrents(Period),
     {reply, Reply, State};
@@ -149,16 +152,29 @@ process_expire_torrent_peers1(DT, {Ids, Cont}, Cnt) ->
                   Ids),
     process_expire_torrent_peers1(DT, ets:select(Cont), length(Ids) + Cnt).
 
-process_torrent_infos([], Callback) ->
-    Q = ets:fun2ms(fun(TI) -> TI end),
+process_torrent_infos([], Period, Callback) ->
+    Q = case Period of
+            infinity ->
+                ets:fun2ms(fun(TI) -> TI end);
+            _ ->
+                FromTime = now_sub_sec(now(), Period),
+                ets:fun2ms(fun(TI=#torrent_info{mtime=MT}) when MT > FromTime -> TI end)
+        end,
     process_torrent_infos1(ets:select(torrent_info, Q, ?QUERY_CHUNK_SIZE), Callback);
-process_torrent_infos(IHs, Callback) ->
+process_torrent_infos(IHs, Period, Callback) ->
+    FromTime = if Period == infinity -> Period;
+                  true -> now_sub_sec(now(), Period)
+               end,
     Data = lists:map(fun (IH) ->
                              case ets:lookup(torrent_info, IH) of
                                  [] ->
                                      undefined;
-                                 [TI] ->
-                                     TI
+                                 [TI=#torrent_info{mtime=MT}] ->
+                                     if MT > FromTime ->
+                                             TI;
+                                        true ->
+                                             undefined
+                                     end
                              end
                      end, IHs),
     Callback(Data).
@@ -169,11 +185,20 @@ process_torrent_infos1({Data, Cont}, Callback) ->
 process_torrent_infos1('$end_of_table', _Callback) ->
     ok.
 
+count_alive_torrents(Period) ->
+    FromTime = now_sub_sec(now(), Period),
+    CntQ = ets:fun2ms(fun(#torrent_info{mtime=MT, seeders=S, leechers=L})
+                            when MT > FromTime ->
+                            true
+                    end),
+    ets:select_count(torrent_info, CntQ).
+
 count_seederless_torrents(Period) ->
     FromTime = now_sub_sec(now(), Period),
-    CntQ = ets:fun2ms(fun(#torrent_info{mtime=MT, seeders=S})
+    CntQ = ets:fun2ms(fun(#torrent_info{mtime=MT, seeders=S, leechers=L})
                             when MT > FromTime,
-                                 S == 0 ->
+                                 S == 0,
+                                 L > 0 ->
                             true
                     end),
     ets:select_count(torrent_info, CntQ).

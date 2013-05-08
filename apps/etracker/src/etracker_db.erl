@@ -19,6 +19,7 @@
 -define(INFO_TBL, etracker_info).
 
 -define(INFO_DB_KEYS, [torrents,
+                       alive_torrents,
                        seederless_torrents,
                        peerless_torrents,
                        seeders,
@@ -135,7 +136,8 @@ torrent_info(InfoHash) when is_binary(InfoHash) ->
 	db_call({torrent_info, InfoHash}).
 
 torrent_infos(InfoHashes, Callback) when is_list(InfoHashes) ->
-	db_call({torrent_infos, InfoHashes, Callback}, infinity).
+    Period = torrents_info_query_period(),
+	db_call({torrent_infos, InfoHashes, Period, Callback}, infinity).
 
 write(Data) ->
     db_call({write, Data}).
@@ -149,6 +151,7 @@ system_info() ->
 system_info(info_keys) -> ?INFO_KEYS;
 system_info(Key) when Key == seeders
                       orelse Key == leechers
+                      orelse Key == alive_torrents
                       orelse Key == seederless_torrents
                       orelse Key == peerless_torrents ->
     CacheTTL = confval(db_cache_peers_ttl, 0),
@@ -156,7 +159,7 @@ system_info(Key) when Key == seeders
     Req = if (Key == leechers) orelse (Key == seeders) ->
                   CacheKey;
              true ->
-                  Period = etracker_env:get(answer_interval, 1800) * 2,
+                  Period = torrents_info_query_period(),
                   {system_info, Key, Period}
           end,
     case CacheTTL of
@@ -201,6 +204,10 @@ system_info_update_counter(Key, Inc) when Key == announces
                                           orelse Key == udp_deleted_connections
                                           orelse Key == udp_connections ->
     ets:update_counter(?INFO_TBL, Key, Inc).
+
+% seconds
+torrents_info_query_period() ->
+    etracker_env:get(answer_interval, 1800) * 3.
 
 import(MgrModule, DbModule, MgrParams, DbParams) ->
     {ok, MgrPid} = MgrModule:start_link(MgrParams),

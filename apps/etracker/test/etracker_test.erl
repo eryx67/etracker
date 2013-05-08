@@ -341,12 +341,13 @@ scrape_all(_Ann) ->
     IHs = all_torrent_info_hashes(),
     Files = proplists:get_value(<<"files">>, Resp, []),
     Flags = lists:sort([K || {K, _} <- proplists:get_value(<<"flags">>, Resp, [])]),
-    Info = proplists:get_value(lists:nth(1, IHs), Files),
+
+    {IH, Info} = lists:nth(1, Files),
     InfoKeys = lists:sort([K || {K, _} <- Info]),
     GenF = fun (_R) ->
                    [
                     ?_assertEqual([<<"files">>, <<"flags">>], Keys),
-                    ?_assertEqual(length(Files), length(IHs)),
+                    ?_assertEqual(true, lists:member(IH, IHs)),
                     ?_assertEqual([<<"complete">>, <<"downloaded">>, <<"incomplete">>], InfoKeys),
                     ?_assertEqual([<<"min_request_interval">>], Flags)
                    ]
@@ -534,3 +535,22 @@ timestamp_to_now({D, {HH, MM, SSMS}}) ->
     Seconds = calendar:datetime_to_gregorian_seconds({D, {HH, MM, SS}}) - 62167219200,
     %% 62167219200 == calendar:datetime_to_gregorian_seconds({{1970, 1, 1}, {0, 0, 0}})
     {Seconds div 1000000, Seconds rem 1000000, erlang:trunc((SSMS - SS) * 1000000)}.
+
+now_sub_sec(Now, Seconds) ->
+    {Mega, Sec, Micro} = Now,
+    SubMega = Seconds div 1000000,
+    SubSec = Seconds rem 1000000,
+    Mega1 = Mega - SubMega,
+    Sec1 = Sec - SubSec,
+    {Mega2, Sec2} = if Mega1 < 0 ->
+                            exit(badarg);
+                       (Sec1 < 0) ->
+                            {Mega1 - 1, 1000000 + Sec1};
+                       true ->
+                            {Mega1, Sec1}
+                    end,
+    if (Mega2 < 0) ->
+            exit(badarg);
+       true ->
+            {Mega2, Sec2, Micro}
+    end.

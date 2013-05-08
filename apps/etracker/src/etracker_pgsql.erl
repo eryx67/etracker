@@ -56,16 +56,23 @@ handle_call({announce, Peer}, _From, State) ->
 	{reply, ok, State};
 handle_call({torrent_info, InfoHash}, _From, State) when is_binary(InfoHash) ->
     {reply, read_torrent_info(InfoHash, State), State};
-handle_call({torrent_infos, [], Callback}, _From, State) ->
-    process_torrent_infos_all(Callback, State),
+handle_call({torrent_infos, [], Period, Callback}, _From, State) ->
+    process_torrent_infos_all(Callback, Period, State),
     {reply, ok, State};
-handle_call({torrent_infos, InfoHashes, Callback}, _From, State) ->
+handle_call({torrent_infos, InfoHashes, Period, Callback}, _From, State) ->
+    FromTime = if Period == infinity -> Period;
+                  true -> now_sub_sec(now(), Period)
+               end,
     Data = lists:map(fun (IH) ->
                              case read_torrent_info(IH, State) of
                                  #torrent_info{info_hash=undefined} ->
                                      undefined;
-                                 TI ->
-                                     TI
+                                 TI=#torrent_info{mtime=MT} ->
+                                     if MT > FromTime ->
+                                             TI;
+                                        true ->
+                                             undefined
+                                     end
                              end
                      end, InfoHashes),
     Ret = Callback(Data),
@@ -81,6 +88,11 @@ handle_call({expire, udp_connection_info, ExpireTime}, _From, State) ->
     {reply, Reply, State};
 handle_call({system_info, torrents}, _From, S=#state{connection=C, statements=Ss}) ->
     {ok, Cnt} = exec_statement(C, torrent_info_count_all, [], Ss),
+    {reply, Cnt, S};
+handle_call({system_info, alive_torrents, Period},
+            _From, S=#state{connection=C, statements=Ss}) ->
+    FromTime = now_to_timestamp(now_sub_sec(now(), Period)),
+    {ok, Cnt} = exec_statement(C, torrent_info_alive_count, [FromTime], Ss),
     {reply, Cnt, S};
 handle_call({system_info, seederless_torrents, Period},
             _From, S=#state{connection=C, statements=Ss}) ->
@@ -268,6 +280,13 @@ setup(State=#state{connection=_C, statements=Ss}) ->
           [int4],
           TorrentInfosF
          },
+         {torrent_infos_from_mtime,
+          "select info_hash, leechers, seeders, completed, name, mtime, ctime"
+          " from torrent_info where mtime > $1 order by mtime desc"
+          " offset $2 limit $3",
+          [timestamp, int4, int4],
+          TorrentInfosF
+         },
          {torrent_peers_seeders_count,
           "select count(*) from torrent_user"
           " where info_hash = $1 and finished = true and event != 'stopped'",
@@ -394,7 +413,13 @@ setup(State=#state{connection=_C, statements=Ss}) ->
          },
          {torrent_info_seederless_count,
           "select count(*) from torrent_info"
-          " where mtime > $1 and seeders = 0",
+          " where mtime > $1",
+          [timestamp],
+          CountF
+         },
+         {torrent_info_seederless_count,
+          "select count(*) from torrent_info"
+          " where mtime > $1 and seeders = 0 and leechers > 0",
           [timestamp],
           CountF
          },
@@ -450,23 +475,26 @@ process_announce(_A=#announce{
     end,
     ok.
 
-process_torrent_infos_all(Callback, #state{connection=C, statements=Ss}) ->
-    case exec_statement(C, torrent_infos_all, [?TORRENT_INFO_LIMIT], Ss) of
+process_torrent_infos_all(Callback, Period, #state{connection=C, statements=Ss}) ->
+    FromTime = case Period of
+                   infinity ->
+                       {0, 0, 0};
+                   _ ->
+                       now_sub_sec(now(), Period)
+               end,
+    FromTimestamp = now_to_timestamp(FromTime),
+    process_torrent_infos_all1(C, Ss, Callback, FromTimestamp, 0).
+
+process_torrent_infos_all1(Conn, Statements, Callback, FromTimestamp, Offset) ->
+    case exec_statement(Conn, torrent_infos_from_mtime,
+                        [FromTimestamp, Offset, ?TORRENT_INFO_LIMIT],
+                        Statements) of
+        {ok, []} ->
+            ok;
         {ok, Rows} ->
             Callback(Rows),
-            ok;
-        {ok, Rows, Cont} ->
-            Callback(Rows),
-            process_torrent_infos_all1(Cont, Callback)
-    end.
-process_torrent_infos_all1(Cont, Callback) ->
-    case Cont() of
-        {ok, Rows} ->
-            Callback(Rows),
-            ok;
-        {ok, Rows, Cont1} ->
-            Callback(Rows),
-            process_torrent_infos_all1(Cont1, Callback)
+            NxtOffset = Offset + length(Rows),
+            process_torrent_infos_all1(Conn, Statements, Callback, FromTimestamp, NxtOffset)
     end.
 
 write_torrent_info(InfoHash, Completed, Finished,
