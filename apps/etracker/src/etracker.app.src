@@ -11,5 +11,14 @@
                   lager
                  ]},
   {mod, { etracker_app, []}},
-  {env, []}
+  {env, [{applications, [syntax_tools,
+                         compiler,
+                         lager,
+                         crypto,
+                         mimetypes,
+                         gproc,
+                         ranch,
+                         cowboy
+                        ]}
+        ]}
  ]}.
