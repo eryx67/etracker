@@ -11,7 +11,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0]).
+-export([start_link/0, dispatch_rules/0]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -25,6 +25,38 @@
 
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+
+dispatch_rules() ->
+    {ok, App} = application:get_application(),
+    PrivDir = case code:priv_dir(App) of
+                  {error,_} -> filename:absname("priv");
+                  Priv -> Priv
+              end,
+    WwwDir = filename:join([PrivDir, confval(www_dir, "www")]),
+    CommonParams = [{www_dir, WwwDir}],
+    AnnounceParams = lists:map(fun ({Attr, Default}) ->
+                                       {Attr, confval(Attr, Default)}
+                               end,
+                               [
+                                {answer_compact, false},
+                                {answer_max_peers, ?ANNOUNCE_ANSWER_MAX_PEERS},
+                                {answer_interval, ?ANNOUNCE_ANSWER_INTERVAL}
+                               ]) ++ CommonParams,
+    ScrapeParams = lists:map(fun ({Attr, Default}) ->
+                                       {Attr, confval(Attr, Default)}
+                               end,
+                               [
+                                {scrape_request_interval, 60 * 30}
+                               ]) ++ CommonParams,
+    %% {Host, list({Path, Handler, Opts})}
+    [{'_', [{"/", cowboy_static, [{directory, WwwDir}
+                                  , {file, <<"html/index.html">>}
+                                  , {mimetypes, {fun mimetypes:path_to_mimes/2, default}}
+                                 ]}
+            , {"/announce", etracker_http_request, {announce, AnnounceParams}}
+            , {"/scrape", etracker_http_request, {scrape, ScrapeParams}}
+            , {"/stats", etracker_http_request, {stats, CommonParams}}
+           ]}].
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -88,44 +120,5 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-%%%===================================================================
-%%% Internal functions
-%%%===================================================================
-
-dispatch_rules() ->
-    {ok, App} = application:get_application(),
-    PrivDir = case code:priv_dir(App) of
-                  {error,_} -> filename:absname("priv");
-                  Priv -> Priv
-              end,
-    WwwDir = filename:join([PrivDir, confval(www_dir, "www")]),
-    CommonParams = [{www_dir, WwwDir}, {application, App}],
-    AnnounceParams = lists:map(fun ({Attr, Default}) ->
-                                       {Attr, confval(Attr, Default)}
-                               end,
-                               [
-                                {answer_compact, false},
-                                {answer_max_peers, ?ANNOUNCE_ANSWER_MAX_PEERS},
-                                {answer_interval, ?ANNOUNCE_ANSWER_INTERVAL}
-                               ]) ++ CommonParams,
-    ScrapeParams = lists:map(fun ({Attr, Default}) ->
-                                       {Attr, confval(Attr, Default)}
-                               end,
-                               [
-                                {scrape_request_interval, 60 * 30}
-                               ]) ++ CommonParams,
-    %% {Host, list({Path, Handler, Opts})}
-    [{'_', [{"/", cowboy_static, [{directory, WwwDir}
-                                  , {file, <<"html/index.html">>}
-                                  , {mimetypes, {fun mimetypes:path_to_mimes/2, default}}
-                                 ]}
-            , {"/announce", etracker_http_request, {announce, AnnounceParams}}
-            , {"/scrape", etracker_http_request, {scrape, ScrapeParams}}
-            , {"/stats", etracker_http_request, {stats, CommonParams}}
-           ]}].
-
 confval(Key, Default) ->
-    case application:get_env(Key) of
-        undefined -> Default;
-        {ok, Val} -> Val
-    end.
+    etracker_env:get(Key, Default).

@@ -1,5 +1,8 @@
-ERL_FLAGS= -pa $(CURDIR)/apps/etracker/.eunit -pa $(CURDIR)/apps/*/ebin \
-	-pa $(CURDIR)/deps/*/ebin -setcookie etracker
+PROJECT := etracker
+PROJECT_DIR := $(CURDIR)/apps/$(PROJECT)
+
+ERL_FLAGS= -pa $(PROJECT_DIR)/.eunit -pa $(CURDIR)/apps/*/ebin \
+	-pa $(CURDIR)/deps/*/ebin -setcookie $(PROJECT)
 
 PROJECT_PLT=$(CURDIR)/.project_plt
 
@@ -11,12 +14,15 @@ endif
 
 REBAR=./rebar
 
+comma := ,
+comma_join = $(subst $(eval) ,$(comma),$(1))
+
 ifeq ($(REBAR),)
 $(error "Rebar not available on this system")
 endif
 
 .PHONY: all build compile doc clean test dialyzer typer shell distclean pdf \
-	deps escript clean-common-test-data
+	deps escript clean-common-test-data etop
 
 all: build compile escript
 
@@ -27,7 +33,7 @@ deps:
 	$(REBAR) get-deps
 	$(REBAR) compile
 
-compile:
+compile: app-src
 	$(REBAR) skip_deps=true compile
 
 escript: compile
@@ -55,21 +61,27 @@ $(PROJECT_PLT):
 
 dialyzer: $(PROJECT_PLT)
 	dialyzer --plt $(PROJECT_PLT) --fullpath -Wrace_conditions \
-	-I include -pa $(CURDIR)/ebin --src apps/etracker/src
+	-I include -pa $(CURDIR)/ebin --src $(PROJECT_DIR)/src
 
 typer:
-	typer --plt $(PROJECT_PLT) -r ./apps/etracker/src
+	typer --plt $(PROJECT_PLT) -r $(PROJECT_DIR)/src
+
+app-src: $(PROJECT_DIR)/src/*.erl
+app-src: override MODULES = $(call comma_join,$(basename $(^F)))
+app-src:
+	sed -i 's/{modules, \[[a-zA-Z0-9_,]*\]}/{modules, \[$(MODULES)\]}/' \
+		$(PROJECT_DIR)/src/$(PROJECT).app.src
 
 shell: deps compile
 	- mkdir -p $(CURDIR)/data
 	- @$(REBAR) skip_deps=true eunit
-	/usr/bin/env ERL_MAX_PORTS=128000 $(ERL) -name etracker@127.0.0.1 $(ERL_FLAGS) \
+	/usr/bin/env ERL_MAX_PORTS=128000 $(ERL) -name $(PROJECT)@127.0.0.1 $(ERL_FLAGS) \
 	+K true +A 32 \
-	-boot start_sasl -config etracker.config
+	-boot start_sasl -config $(PROJECT).config
 
 etop:
 		erl -name etop@127.0.0.1 -hidden -s etop -s erlang halt -output text \
-		-node etracker@127.0.0.1 -setcookie etracker -tracing off
+		-node $(PROJECT)@127.0.0.1 -setcookie $(PROJECT) -tracing off
 
 pdf:
 	pandoc README.md -o README.pdf

@@ -5,11 +5,10 @@
 
 -export([html/2, css/2, js/2]).
 
--record(state, {application, www_dir, path}).
+-record(state, {www_dir, path}).
 
 init({tcp, http}, Req, {Params, Path}) ->
     {ok, Req, #state{
-                 application=proplists:get_value(application, Params),
                  www_dir=proplists:get_value(www_dir, Params),
                  path=Path
                 }

@@ -104,7 +104,4 @@ system_code_change(State, _Module, _OldVsn, _Extra) ->
     {ok, State}.
 
 confval(Key, Default) ->
-    case application:get_env(Key) of
-        undefined -> Default;
-        {ok, Val} -> Val
-    end.
+    etracker_env:get(Key, Default).
