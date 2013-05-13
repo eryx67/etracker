@@ -2,7 +2,7 @@
  [
   {description, "Torrent tracker"},
   {vsn, "1.0.0"},
-  {modules, [etracker_mnesia,etracker_http_static,etracker_udp_request,etracker_pgsql_mgr,etracker_cleaner,etracker_db_mgr,etracker_app,etracker_hanoidb_mgr,etracker,etracker_pgsql,etracker_db,etracker_http_srv,etracker_hanoidb,etracker_ets_mgr,etracker_udp_sup,etracker_env,etracker_udp_srv,etracker_mnesia_mgr,etracker_http_request,etracker_ets,etracker_sup,etracker_db_cache,etracker_event]},
+  {modules, [etracker_mnesia,etracker_http_static,etracker_udp_request,etracker_pgsql_mgr,etracker_cleaner,etracker_db_mgr,etracker_app,etracker,etracker_pgsql,etracker_db,etracker_http_srv,etracker_ets_mgr,etracker_udp_sup,etracker_env,etracker_udp_srv,etracker_mnesia_mgr,etracker_http_request,etracker_ets,etracker_sup,etracker_db_cache,etracker_event]},
   {registered, []},
   {applications, [
                   kernel,
