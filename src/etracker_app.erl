@@ -9,7 +9,7 @@
 %% Application callbacks
 %% ===================================================================
 start(_StartType, _StartArgs) ->
-    {ok, Deps} = application:get_key(etracker, applications),
+    {ok, Deps} = application:get_env(etracker, applications),
     lists:foreach(fun ensure_started/1, Deps),
     etracker_sup:start_link().
 

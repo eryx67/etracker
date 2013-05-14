@@ -7,9 +7,11 @@ $(warning "PROJECT_TYPE is not defined, set to 'application'")
 PROJECT_TYPE = application
 endif
 
+ifeq ($(PROJECT_DIR),)
 PROJECT_DIR := $(CURDIR)
+endif
 
-ERL_FLAGS= -pa $(PROJECT_DIR)/.eunit -pa $(CURDIR)/ebin \
+ERL_FLAGS= -pa $(PROJECT_DIR)/.eunit -pa $(PROJECT_DIR)/ebin \
 	-pa $(CURDIR)/deps/*/ebin -setcookie $(PROJECT)
 
 PROJECT_PLT=$(CURDIR)/.project_plt
