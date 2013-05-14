@@ -2,9 +2,14 @@ ifeq ($(PROJECT),)
 $(error "Please set PROJECT variable in your Makefile")
 endif
 
-PROJECT_DIR := $(CURDIR)/apps/$(PROJECT)
+ifeq ($(PROJECT_TYPE),)
+$(warning "PROJECT_TYPE is not defined, set to 'application'")
+PROJECT_TYPE = application
+endif
 
-ERL_FLAGS= -pa $(PROJECT_DIR)/.eunit -pa $(CURDIR)/apps/*/ebin \
+PROJECT_DIR := $(CURDIR)
+
+ERL_FLAGS= -pa $(PROJECT_DIR)/.eunit -pa $(CURDIR)/ebin \
 	-pa $(CURDIR)/deps/*/ebin -setcookie $(PROJECT)
 
 PROJECT_PLT=$(CURDIR)/.project_plt
@@ -19,6 +24,8 @@ REBAR=./rebar
 
 comma := ,
 comma_join = $(subst $(eval) ,$(comma),$(1))
+when_project_app = $(and $(filter app%, $(PROJECT_TYPE)), $(1))
+when_project_rel = $(and $(filter rel% node%, $(PROJECT_TYPE)), $(1))
 
 ifeq ($(REBAR),)
 $(error "Rebar not available on this system")
@@ -27,7 +34,7 @@ endif
 .PHONY: all build compile doc clean test dialyzer typer shell distclean pdf \
 	deps escript clean-common-test-data etop
 
-all: build compile escript
+all: deps compile $(call  when_project_rel,build) $(call  when_project_app,escript)
 
 build: deps compile
 	$(REBAR) generate
@@ -36,7 +43,7 @@ deps:
 	$(REBAR) get-deps
 	$(REBAR) compile
 
-compile: app-src
+compile: $(call when_project_app,app-src)
 	$(REBAR) skip_deps=true compile
 
 escript: compile
