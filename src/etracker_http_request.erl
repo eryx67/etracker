@@ -132,12 +132,12 @@ scrape_request_reply(Req, Params) ->
             lager:error("invalid scrape, error ~w~n** Request was ~w~n", [Error, Req]),
             etracker_event:invalid_query({scrape, Error}),
             Body = etorrent_bcoding:encode([{<<"failure reason">>, Error}]),
-            cowboy_req:reply(900, Headers, Body, Req);
+            cowboy_req:reply(200, Headers, Body, Req);
         error:Error ->
             etracker_event:failed_query({scrape, Error}),
             lager:error("error when parsing scrape ~w, backtrace ~p~n",
                          [Error,erlang:get_stacktrace()]),
-            cowboy_req:reply(900, Headers, <<"Invalid request">>, Req)
+            cowboy_req:reply(400, Headers, <<"Invalid request">>, Req)
     end.
 
 scrape_request_reply_file(Preamble, Postamble, Req) ->
@@ -147,7 +147,7 @@ scrape_request_reply_file(Preamble, Postamble, Req) ->
             scrape_request_reply_write([], Preamble, Postamble, Req);
         {error, Reason} ->
             lager:error("~s error on full scrape generation ~w", [?MODULE, Reason]),
-            cowboy_req:reply(900, Req);
+            cowboy_req:reply(400, Req);
         {ok, FileName} ->
             WriteFs = [{fun gen_tcp:send/2, Preamble},
                        {fun (S, FN) -> file:sendfile(FN, S) end, FileName},
@@ -223,17 +223,19 @@ announce_request_reply(Req, Params) ->
         throw:Error ->
             lager:error("invalid announce, error ~w~n** Request was ~w~n", [Error, Req]),
             etracker_event:invalid_query({announce, Error}),
-            case Error of
-                {RetCode, Reason} ->
-                    {etorrent_bcoding:encode([{<<"failure reason">>, Reason}]), RetCode, Req};
-                Reason ->
-                    {etorrent_bcoding:encode([{<<"failure reason">>, Reason}]), 900, Req}
-            end;
+            {RetCode, Reason} =
+                case Error of
+                    {_RCode, _Reason} ->
+                        Error;
+                    _ ->
+                        {200, Error}
+                end,
+            {etorrent_bcoding:encode([{<<"failure reason">>, Reason}]), RetCode, Req};
         error:Error ->
             etracker_event:failed_query({announce, Error}),
             lager:error("Error when parsing announce ~w~n** Request was ~w~n**Backtrace ~p~n",
                         [Error, Req, erlang:get_stacktrace()]),
-            {<<"Invalid request">>, 900, Req}
+            {<<"Invalid request">>, 400, Req}
     end.
 
 scrape_pack_torrent_infos(TorrentInfos) ->
@@ -363,15 +365,15 @@ request_attr_value(_Attr, Val) ->
     Val.
 
 request_attr_validate(info_hash, undefined) ->
-    {101, <<"required">>};
+    {200, <<"required">>};
 request_attr_validate(peer_id, undefined) ->
-    {102, <<"required">>};
+    {200, <<"required">>};
 request_attr_validate(port, undefined) ->
-    {103, <<"required">>};
+    {200, <<"required">>};
 request_attr_validate(info_hash, Val) when size(Val) /= ?INFOHASH_LENGTH ->
-    {150, <<"invalid value">>};
+    {200, <<"invalid value">>};
 request_attr_validate(peer_id, Val) when size(Val) /= ?INFOHASH_LENGTH ->
-    {151, <<"invalid value">>};
+    {200, <<"invalid value">>};
 request_attr_validate(_Attr=port, Val) when Val > 16#ffff ->
     <<"invalid value">>;
 request_attr_validate(Attr, Val) when Val < 0
