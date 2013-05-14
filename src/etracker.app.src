@@ -6,9 +6,7 @@
   {registered, []},
   {applications, [
                   kernel,
-                  stdlib,
-                  crypto,
-                  lager
+                  stdlib
                  ]},
   {mod, { etracker_app, []}},
   {env, [{applications, [syntax_tools,
