@@ -26,7 +26,7 @@
 
 subscribe() ->
     Self = self(),
-    gen_event:add_handler(?SERVER, {?MODULE, Self}, #state{handler=Self}).
+    gen_event:add_sup_handler(?SERVER, {?MODULE, Self}, #state{handler=Self}).
 
 unsubscribe() ->
     gen_event:delete_handler(?SERVER, {?MODULE, self()}, []).

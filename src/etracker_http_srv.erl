@@ -11,7 +11,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0, dispatch_rules/0]).
+-export([start_link/0, dispatch_rules/0, dispatch_rules/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -25,6 +25,9 @@
 
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+
+dispatch_rules(Disp) ->
+    cowboy:set_env(?HTTP_LISTENER, dispatch, cowboy_router:compile(Disp)).
 
 dispatch_rules() ->
     {ok, App} = application:get_application(),
