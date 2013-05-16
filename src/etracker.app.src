@@ -1,3 +1,5 @@
+%% -*- mode: erlang -*-
+
 {application, etracker,
  [
   {description, "Torrent tracker"},
@@ -6,17 +8,16 @@
   {registered, []},
   {applications, [
                   kernel,
-                  stdlib
+                  stdlib,
+                  syntax_tools,
+                  compiler,
+                  lager,
+                  crypto,
+                  mimetypes,
+                  gproc,
+                  ranch,
+                  cowboy
                  ]},
   {mod, { etracker_app, []}},
-  {env, [{applications, [syntax_tools,
-                         compiler,
-                         lager,
-                         crypto,
-                         mimetypes,
-                         gproc,
-                         ranch,
-                         cowboy
-                        ]}
-        ]}
+  {env, []}
  ]}.
