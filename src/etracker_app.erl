@@ -2,18 +2,27 @@
 
 -behaviour(application).
 
-%% Application callbacks
--export([start/2, stop/1]).
+-export([start/0, start/2, stop/1]).
+
+-define(APP, etracker).
+
+start() ->
+    application:load(?APP),
+    start_app_deps(?APP),
+    application:start(?APP).
 
 %% ===================================================================
 %% Application callbacks
 %% ===================================================================
 start(_StartType, _StartArgs) ->
-    {ok, Deps} = application:get_key(etracker, applications),
-    lists:foreach(fun ensure_started/1, Deps),
     etracker_sup:start_link().
 
 stop(_State) ->
+    ok.
+
+start_app_deps(App) ->
+    {ok, DepApps} = application:get_key(App, applications),
+    lists:foreach(fun ensure_started/1, DepApps),
     ok.
 
 ensure_started(App) ->

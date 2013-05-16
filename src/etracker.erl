@@ -2,11 +2,13 @@
 
 -export([start/0, stop/0, info/0, info/1]).
 
+-define(APP, etracker).
+
 start() ->
-    application:start(etracker).
+    etracker_app:start().
 
 stop() ->
-    application:stop(etracker).
+    application:stop(?APP).
 
 info() ->
     etracker_db:system_info().
