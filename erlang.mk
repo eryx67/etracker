@@ -11,8 +11,19 @@ ifeq ($(PROJECT_DIR),)
 PROJECT_DIR := $(CURDIR)
 endif
 
+ifeq ($(NODE),)
+NODE := $(PROJECT)@127.0.0.1
+endif
+
+ifeq ($(NODE_COOKIE),)
+NODE_COOKIE := $(PROJECT)
+endif
+
+# ERL_FLAGS= -pa $(PROJECT_DIR)/.eunit -pa $(PROJECT_DIR)/ebin \
+# 	-pa $(CURDIR)/deps/*/ebin -setcookie $(PROJECT)
+
 ERL_FLAGS= -pa $(PROJECT_DIR)/.eunit -pa $(PROJECT_DIR)/ebin \
-	-pa $(CURDIR)/deps/*/ebin -setcookie $(PROJECT)
+	-pa $(CURDIR)/deps/*/ebin
 
 PROJECT_PLT=$(CURDIR)/.project_plt
 
@@ -44,6 +55,17 @@ build: deps compile
 deps:
 	$(REBAR) get-deps
 	$(REBAR) compile
+
+update-deps:
+	$(REBAR) update-deps; \
+	for dir in $(dir $(wildcard deps/*/.git)); do \
+		pushd `pwd`; \
+		echo Pulling in $$dir; \
+		cd $$dir; \
+		git pull; \
+		git checkout; \
+		popd; \
+	done
 
 compile: $(call when_project_app,app-src)
 	$(REBAR) skip_deps=true compile
@@ -87,13 +109,17 @@ app-src:
 shell: deps compile
 	- mkdir -p $(CURDIR)/data
 	- @$(REBAR) skip_deps=true eunit
-	/usr/bin/env ERL_MAX_PORTS=128000 $(ERL) -name $(PROJECT)@127.0.0.1 $(ERL_FLAGS) \
-	+K true +A 32 \
+	$(ERL) -name $(NODE) -setcookie $(NODE_COOKIE) $(ERL_FLAGS) \
+	+K true +A 256 +P 512000  +Q 128000 \
 	-boot start_sasl -config $(PROJECT).config
 
 etop:
-		erl -name etop@127.0.0.1 -hidden -s etop -s erlang halt -output text \
-		-node $(PROJECT)@127.0.0.1 -setcookie $(PROJECT) -tracing off
+		erl +d -name etop@127.0.0.1 -hidden -s etop -s erlang halt -output text \
+		-node $(NODE) -setcookie $(NODE_COOKIE) -tracing off
+
+entop:
+		erl -hidden -noinput $(ERL_FLAGS) +d +A 20 -name entop@127.0.0.1 \
+		-eval "entop:start('$(NODE)')" -setcookie $(NODE_COOKIE)
 
 pdf:
 	pandoc README.md -o README.pdf

@@ -5,7 +5,7 @@
 -include("etracker.hrl").
 
 -define(PEERS, test_peers).
--define(TRACKER_URL, "http://localhost:8080").
+-define(TRACKER_URL, "http://localhost:8181").
 -define(TRACKER_PEER, {{127, 0, 0, 1}, 8080}).
 
 etracker_test_() ->
@@ -50,6 +50,7 @@ etracker_cleaner_test_() ->
     }.
 
 start_apps() ->
+    application:start(asn1),
     etorrent:start_app(),
     etracker:start(),
     timer:sleep(5000),

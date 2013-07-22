@@ -32,20 +32,20 @@
 -define(UDP_SCRAPE_MAX_TORRENTS, 74).
 
 -record(announce, {
-          info_hash, %% urlencoded 20-byte SHA1 hash of the value of the info key from the Metainfo file
-          peer_id, %% urlencoded 20-byte string used as a unique ID for the client
-          port, %% The port number that the client is listening on.
-          uploaded, %% The total amount uploaded in base ten ASCII.
-          downloaded, %%: The total amount downloaded in base ten ASCII.
+          info_hash :: etracker:infohash(), %% urlencoded 20-byte SHA1 hash of the value of the info key from the Metainfo file
+          peer_id :: etracker:peerid(), %% urlencoded 20-byte string used as a unique ID for the client
+          port :: etracker:portnum(), %% The port number that the client is listening on.
+          uploaded :: integer(), %% The total amount uploaded in base ten ASCII.
+          downloaded :: integer(), %%: The total amount downloaded in base ten ASCII.
           left, %% The number of bytes this client still has to download in base ten ASCII.
-          compact = false, %% Setting this to 1 indicates that the client accepts a compact response.
-          no_peer_id = false, %% Indicates that the tracker can omit peer id field in peers dictionary.
-          event,  %% <<"started">> | <<"completed">>| <<"stopped">> | undefined
-          ip, %% Optional. The true IP address of the client machine
-          numwant = 50, %% Optional. Number of peers that the client would like to receive.
-          key, %% Optional. An additional client identification mechanism that is not shared with any peers. It is intended to allow a client to prove their identity should their IP address change.
-          trackerid, %% Optional. If a previous announce contained a tracker id, it should be set here.
-          protocol = http
+          compact = false :: boolean(), %% Setting this to 1 indicates that the client accepts a compact response.
+          no_peer_id = false :: boolean(), %% Indicates that the tracker can omit peer id field in peers dictionary.
+          event :: etracker:event(),  %% <<"started">> | <<"completed">>| <<"stopped">> | undefined
+          ip :: etracker:ipaddr(), %% Optional. The true IP address of the client machine
+          numwant = 50 :: integer(), %% Optional. Number of peers that the client would like to receive.
+          key :: binary(), %% Optional. An additional client identification mechanism that is not shared with any peers. It is intended to allow a client to prove their identity should their IP address change.
+          trackerid :: binary(), %% Optional. If a previous announce contained a tracker id, it should be set here.
+          protocol = http :: 'http' | 'udp'
 
          }).
 

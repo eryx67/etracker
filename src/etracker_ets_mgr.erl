@@ -241,7 +241,8 @@ open_table(TN=torrent_info, DataDir) ->
                                 ],
     ets:new(TN, EtsOpts),
     ok = open_dets(TN, [{type, set}|TblOpts], DataDir),
-    true = ets:from_dets(TN, TN);
+    true = ets:from_dets(TN, TN),
+    dets:safe_fixtable(TN, false);
 open_table(TN=torrent_user, DataDir) ->
     Type = ordered_set,
     TblOpts = [{keypos, #torrent_user.id}],
@@ -266,6 +267,7 @@ open_table(TN, _DataDir) when TN == torrent_seeder
     ets:new(TN, EtsOpts).
 
 save_table(TN) ->
+    dets:safe_fixtable(TN, false),
     ets:to_dets(TN, TN).
 
 open_dets(TableName, Opts, DataDir) ->

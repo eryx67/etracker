@@ -112,11 +112,11 @@ scrape_request_reply(Req, Params) ->
             etracker_event:scrape(#scrape{info_hashes=IHs, protocol=http}),
             SRI = proplists:get_value(scrape_request_interval, Params),
             Preamble = ["d",
-                        etorrent_bcoding:encode(<<"files">>),
+                        etracker_bcoding:encode(<<"files">>),
                         "d"],
             Postamble = ["e",
-                         etorrent_bcoding:encode(<<"flags">>),
-                         etorrent_bcoding:encode([{<<"min_request_interval">>, SRI}]),
+                         etracker_bcoding:encode(<<"flags">>),
+                         etracker_bcoding:encode([{<<"min_request_interval">>, SRI}]),
                          "e"],
             Req2 = lists:foldl(fun ({K, V}, R) ->
                                        cowboy_req:set_resp_header(K, V, R)
@@ -131,7 +131,7 @@ scrape_request_reply(Req, Params) ->
         throw:Error ->
             lager:error("invalid scrape, error ~w~n** Request was ~w~n", [Error, Req]),
             etracker_event:invalid_query({scrape, Error}),
-            Body = etorrent_bcoding:encode([{<<"failure reason">>, Error}]),
+            Body = etracker_bcoding:encode([{<<"failure reason">>, Error}]),
             cowboy_req:reply(200, Headers, Body, Req);
         error:Error ->
             etracker_event:failed_query({scrape, Error}),
@@ -211,7 +211,7 @@ announce_request_reply(Req, Params) ->
             {Complete, Incomplete, Peers1} = etracker_db:torrent_peers(IH, MaxPeers + 1),
             Peers2 = [P || P <- Peers1, element(1, P) /= PI],
             Peers3 = lists:sublist(Peers2, NW1),
-            Body = etorrent_bcoding:encode([
+            Body = etracker_bcoding:encode([
                                             {<<"interval">>, ClntInterval},
                                             {<<"min interval">>, ClntMinInterval},
                                             {<<"complete">>, Complete},
@@ -230,7 +230,7 @@ announce_request_reply(Req, Params) ->
                     _ ->
                         {200, Error}
                 end,
-            {etorrent_bcoding:encode([{<<"failure reason">>, Reason}]), RetCode, Req};
+            {etracker_bcoding:encode([{<<"failure reason">>, Reason}]), RetCode, Req};
         error:Error ->
             etracker_event:failed_query({announce, Error}),
             lager:error("Error when parsing announce ~w~n** Request was ~w~n**Backtrace ~p~n",
@@ -257,7 +257,7 @@ scrape_pack_torrent_infos(TorrentInfos) ->
                                       {<<"downloaded">>, Downloaded}
                                       | Val1
                                      ],
-                              [etorrent_bcoding:encode(IH), etorrent_bcoding:encode(Val2)]
+                              [etracker_bcoding:encode(IH), etracker_bcoding:encode(Val2)]
                       end,
     [PackInfoHashFun(TI) || TI <- TorrentInfos, is_record(TI, torrent_info)].
 
