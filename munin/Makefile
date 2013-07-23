@@ -1,4 +1,4 @@
-PROGNAME := dhtor
+PROGNAME := etracker
 QL_DIR := $(CURDIR)/quicklisp
 QLASDF_DIR := $(QL_DIR)/dists/quicklisp/software
 BUILDAPP_DIR := $(CURDIR)/buildapp
