@@ -1,1 +1,1 @@
-Munin plugin for DHTOR.
+Munin plugin for ETRACKER.
