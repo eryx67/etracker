@@ -14,7 +14,11 @@
 -define(SERVER, ?MODULE).
 
 start_link() ->
-    DefaultOpts = {etracker_mnesia_mgr, [{timeout, 60000}]},
+    DefaultOpts = {etracker_ets_mgr, [{dir, "etracker_data"},
+                                      {dump_interval, 3600},
+                                      %% {db_type, ets}
+                                      {db_type, dict}
+                                     ]},
     {Module, Args} = confval(db_mgr, DefaultOpts),
     Ret = Module:start_link(Args),
     case Ret of

@@ -61,7 +61,7 @@ handle_call({torrent_infos, [], Period, Callback}, _From, State) ->
     {reply, ok, State};
 handle_call({torrent_infos, InfoHashes, Period, Callback}, _From, State) ->
     FromTime = if Period == infinity -> Period;
-                  true -> now_sub_sec(now(), Period)
+                  true -> etracker_time:now_sub_sec(now(), Period)
                end,
     Data = lists:map(fun (IH) ->
                              case read_torrent_info(IH, State) of
@@ -86,31 +86,31 @@ handle_call({expire, torrent_user, ExpireTime}, _From, State) ->
 handle_call({expire, udp_connection_info, ExpireTime}, _From, State) ->
     Reply = process_expire_udp_connections(ExpireTime, State),
     {reply, Reply, State};
-handle_call({system_info, torrents}, _From, S=#state{connection=C, statements=Ss}) ->
+handle_call({stats_info, torrents}, _From, S=#state{connection=C, statements=Ss}) ->
     {ok, Cnt} = exec_statement(C, torrent_info_count_all, [], Ss),
     {reply, Cnt, S};
-handle_call({system_info, alive_torrents, Period},
+handle_call({stats_info, alive_torrents, Period},
             _From, S=#state{connection=C, statements=Ss}) ->
-    FromTime = now_to_timestamp(now_sub_sec(now(), Period)),
+    FromTime = etracker_time:now_to_timestamp(etracker_time:now_sub_sec(now(), Period)),
     {ok, Cnt} = exec_statement(C, torrent_info_alive_count, [FromTime], Ss),
     {reply, Cnt, S};
-handle_call({system_info, seederless_torrents, Period},
+handle_call({stats_info, seederless_torrents, Period},
             _From, S=#state{connection=C, statements=Ss}) ->
-    FromTime = now_to_timestamp(now_sub_sec(now(), Period)),
+    FromTime = etracker_time:now_to_timestamp(etracker_time:now_sub_sec(now(), Period)),
     {ok, Cnt} = exec_statement(C, torrent_info_seederless_count, [FromTime], Ss),
     {reply, Cnt, S};
-handle_call({system_info, peerless_torrents, Period},
+handle_call({stats_info, peerless_torrents, Period},
             _From, S=#state{connection=C, statements=Ss}) ->
-    FromTime = now_to_timestamp(now_sub_sec(now(), Period)),
+    FromTime = etracker_time:now_to_timestamp(etracker_time:now_sub_sec(now(), Period)),
     {ok, Cnt} = exec_statement(C, torrent_info_peerless_count, [FromTime], Ss),
     {reply, Cnt, S};
-handle_call({system_info, peers}, _From, S=#state{connection=C, statements=Ss} ) ->
+handle_call({stats_info, peers}, _From, S=#state{connection=C, statements=Ss} ) ->
     {ok, Cnt} = exec_statement(C, peers_count_all, [], Ss),
     {reply, Cnt, S};
-handle_call({system_info, seeders}, _From, S=#state{connection=C, statements=Ss} ) ->
+handle_call({stats_info, seeders}, _From, S=#state{connection=C, statements=Ss} ) ->
     {ok, Cnt} = exec_statement(C, peers_seeders_count_all, [], Ss),
     {reply, Cnt, S};
-handle_call({system_info, leechers}, _From, S=#state{connection=C, statements=Ss} ) ->
+handle_call({stats_info, leechers}, _From, S=#state{connection=C, statements=Ss} ) ->
     {ok, Cnt} = exec_statement(C, peers_leechers_count_all, [], Ss),
     {reply, Cnt, S};
 handle_call({equery, Query, Params}, _From, S=#state{connection=C}) ->
@@ -121,7 +121,7 @@ handle_call({write, _TI=#torrent_info{
                            seeders=Seeders,
                            completed=Completed}},
             _From, S=#state{connection=C, statements=Ss}) ->
-    MT = now_to_timestamp(now()),
+    MT = etracker_time:now_to_timestamp(now()),
     Args = [InfoHash, Completed, Seeders, Leechers, MT],
     case exec_statement(C, update_torrent_info, Args, Ss) of
         {ok, 0} ->
@@ -139,7 +139,7 @@ handle_call({write, _TU=#torrent_user{id={IH, PeerId},
                                       finished=F
                                      }},
             _From, S=#state{connection=C, statements=Ss}) ->
-    MT = now_to_timestamp(now()),
+    MT = etracker_time:now_to_timestamp(now()),
     Args = [IH, PeerId, address_from_erl(Address), Port, U, D, L, Evt, F, MT],
     case exec_statement(C, update_peer, Args, Ss) of
         {ok, 0} ->
@@ -150,7 +150,7 @@ handle_call({write, _TU=#torrent_user{id={IH, PeerId},
     {reply, ok, S};
 handle_call({write, _CI=#udp_connection_info{id=Id}},
             _From, S=#state{connection=C, statements=Ss}) ->
-    MT = now_to_timestamp(now()),
+    MT = etracker_time:now_to_timestamp(now()),
     Args = [Id, MT],
     case exec_statement(C, update_udp_connection_info, Args, Ss) of
         {ok, 0} ->
@@ -210,8 +210,8 @@ setup(State=#state{connection=_C, statements=Ss}) ->
                                    seeders=Seeders,
                                    completed=Completed,
                                    name=Name,
-                                   mtime=timestamp_to_now(Mtime),
-                                   ctime=timestamp_to_now(Ctime)
+                                   mtime=etracker_time:timestamp_to_now(Mtime),
+                                   ctime=etracker_time:timestamp_to_now(Ctime)
                                   }
                         end,
     RowToTorrentUserF = fun ({InfoHash, PeerId, Address, Port,
@@ -225,7 +225,7 @@ setup(State=#state{connection=_C, statements=Ss}) ->
                                    left=Left,
                                    event=Event,
                                    finished=Finished,
-                                   mtime=timestamp_to_now(Mtime)
+                                   mtime=etracker_time:timestamp_to_now(Mtime)
                                   }
                         end,
     TorrentInfoF = fun ([Row], _Cnt) ->
@@ -443,11 +443,11 @@ setup(State=#state{connection=_C, statements=Ss}) ->
 
 process_expire_udp_connections(ExpireTime,#state{connection=C, statements=Ss}) ->
     {ok, Cnt} = exec_statement(C, delete_expired_udp_connections,
-                               [now_to_timestamp(ExpireTime)], Ss),
+                               [etracker_time:now_to_timestamp(ExpireTime)], Ss),
     Cnt.
 process_expire_torrent_peers(ExpireTime,#state{connection=C, statements=Ss}) ->
     {ok, Cnt} = exec_statement(C, delete_expired_peers,
-                               [now_to_timestamp(ExpireTime)], Ss),
+                               [etracker_time:now_to_timestamp(ExpireTime)], Ss),
     Cnt.
 
 process_torrent_peers(InfoHash, Wanted, State=#state{connection=C, statements=Ss}) ->
@@ -480,9 +480,9 @@ process_torrent_infos_all(Callback, Period, #state{connection=C, statements=Ss})
                    infinity ->
                        {0, 0, 0};
                    _ ->
-                       now_sub_sec(now(), Period)
+                       etracker_time:now_sub_sec(now(), Period)
                end,
-    FromTimestamp = now_to_timestamp(FromTime),
+    FromTimestamp = etracker_time:now_to_timestamp(FromTime),
     process_torrent_infos_all1(C, Ss, Callback, FromTimestamp, 0).
 
 process_torrent_infos_all1(Conn, Statements, Callback, FromTimestamp, Offset) ->
@@ -510,7 +510,7 @@ write_torrent_info(InfoHash, Completed, Finished,
                                       _ ->
                                           {0, 1}
                                   end,
-            MT = now_to_timestamp(now()),
+            MT = etracker_time:now_to_timestamp(now()),
             Args = [InfoHash, AddCompleted, Seeders, Leechers, MT],
             exec_statement(C, insert_torrent_info, Args, Ss),
             ok;
@@ -550,12 +550,12 @@ read_torrent_leechers(InfoHash, Available, Wanted, #state{connection=C, statemen
                                     [InfoHash, Offset, Wanted], Ss),
     Leechers.
 
-delete_peer(InfoHash, PeerId, #state{connection=C, statements=Ss}) ->
-    exec_statement(C, delete_peer, [InfoHash, PeerId], Ss).
+%%delete_peer(InfoHash, PeerId, #state{connection=C, statements=Ss}) ->
+%%    exec_statement(C, delete_peer, [InfoHash, PeerId], Ss).
 
 write_peer(InfoHash, PeerId, IP, Port, Upl, Dld, Left, Event, Finished,
            #state{connection=C, statements=Ss}) ->
-    MT = now_to_timestamp(now()),
+    MT = etracker_time:now_to_timestamp(now()),
     Address = address_from_erl(IP),
     Args = [InfoHash, PeerId, Address, Port, Upl, Dld, Left, Event, Finished, MT],
     case exec_statement(C, update_peer, Args, Ss) of
@@ -631,31 +631,3 @@ address_to_erl(Address) ->
 
 address_from_erl(Address) ->
     tuple_to_list(Address).
-
-now_to_timestamp(Time) ->
-    calendar:now_to_local_time(Time).
-
-timestamp_to_now({D, {HH, MM, SSMS}}) ->
-    SS = erlang:trunc(SSMS),
-    Seconds = calendar:datetime_to_gregorian_seconds({D, {HH, MM, SS}}) - 62167219200,
-    %% 62167219200 == calendar:datetime_to_gregorian_seconds({{1970, 1, 1}, {0, 0, 0}})
-    {Seconds div 1000000, Seconds rem 1000000, erlang:trunc((SSMS - SS) * 1000000)}.
-
-now_sub_sec(Now, Seconds) ->
-    {Mega, Sec, Micro} = Now,
-    SubMega = Seconds div 1000000,
-    SubSec = Seconds rem 1000000,
-    Mega1 = Mega - SubMega,
-    Sec1 = Sec - SubSec,
-    {Mega2, Sec2} = if Mega1 < 0 ->
-                            exit(badarg);
-                       (Sec1 < 0) ->
-                            {Mega1 - 1, 1000000 + Sec1};
-                       true ->
-                            {Mega1, Sec1}
-                    end,
-    if (Mega2 < 0) ->
-            exit(badarg);
-       true ->
-            {Mega2, Sec2, Micro}
-    end.

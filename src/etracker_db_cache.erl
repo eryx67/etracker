@@ -15,25 +15,25 @@
 
 start_link() ->
     CacheSize = confval(db_cache_size, undefined),
-    cadfaerl:start_link(?SERVER, CacheSize).
+    etsachet:start_link(?SERVER, CacheSize).
 
 stop() ->
-    cadfaerl:stop(?SERVER).
+    etsachet:stop(?SERVER).
 
 reset() ->
-    cadfaerl:reset(?SERVER).
+    etsachet:reset(?SERVER).
 
 put(Key, Val) ->
-    cadfaerl:put(?SERVER, Key, Val).
+    etsachet:put(?SERVER, Key, Val).
 
 put_ttl(Key, Val, TTL) ->
-    cadfaerl:put_ttl(?SERVER, Key, Val, TTL).
+    etsachet:put_ttl(?SERVER, Key, Val, TTL).
 
 get(Key) ->
-    cadfaerl:get(?SERVER, Key).
+    etsachet:get(?SERVER, Key).
 
 remove(Key) ->
-    cadfaerl:remove(?SERVER, Key).
+    etsachet:remove(?SERVER, Key).
 
 confval(Key, Default) ->
     etracker_env:get(Key, Default).

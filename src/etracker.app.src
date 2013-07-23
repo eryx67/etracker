@@ -4,7 +4,7 @@
  [
   {description, "Torrent tracker"},
   {vsn, "1.0.0"},
-  {modules, [etracker_mnesia,etracker_http_static,etracker_udp_request,etracker_pgsql_mgr,etracker_cleaner,etracker_types,etracker_app,etracker_db_mgr,etracker,etracker_pgsql,etracker_bcoding,etracker_db,etracker_http_srv,etracker_ets_mgr,etracker_udp_sup,etracker_env,etracker_udp_srv,etracker_mnesia_mgr,etracker_http_request,etracker_ets,etracker_sup,etracker_db_cache,etracker_event]},
+  {modules, [etracker_http_static,etracker_udp_request,etracker_pgsql_mgr,etracker_sup,etracker_types,etracker_time,etracker_app,etracker_db_mgr,etracker,etracker_pgsql,etracker_bcoding,etracker_db,etracker_http_srv,etracker_ets_mgr,etracker_udp_sup,etracker_env,etracker_udp_srv,etracker_http_request,etracker_ets,etracker_db_sup,etracker_jobs,etracker_db_cache,etracker_event]},
   {registered, []},
   {applications, [
                   kernel,
@@ -16,8 +16,73 @@
                   mimetypes,
                   gproc,
                   ranch,
-                  cowboy
+                  cowboy,
+                  folsom,
+                  etsachet
                  ]},
   {mod, { etracker_app, []}},
-  {env, []}
+  {env, [{jobs, [{udp, [{hz, 1000},
+                        {rate, 4096},
+                        {token_limit, 65536},
+                        {size, 131072},
+                        {concurrency, 65536},
+                        {queue_type, sv_codel},
+                        {queue_args, [5000, 10000]}
+                       ]}
+                ]},
+         {http_port, 6969},               % port to listen for requests
+         {http_ip, "127.0.0.1"},          % server address
+         {http_num_acceptors, 128},        % pool of request acceptors
+
+         {udp_port, 6969},
+         {udp_ip, "127.0.0.1"},
+
+         {answer_compact, false},         % always return compact list of peers
+         {answer_max_peers, 50},          % max number of peers to return
+         {answer_interval, 1800},         % client interval value in answer to announce
+         {clean_interval, 2700},          % database garbage clearing interval
+         {scrape_request_interval, 1800}, % minimum number of seconds to wait before
+                                                % scraping the tracker again
+         %% {db_pool, {
+         %%    [{worker_module, etracker_mnesia},
+         %%     {size, 16}, {max_overflow, 32}
+         %%    ],
+         %%    [{timeout, 60000}]            % how many seconds wait for tables
+         %%   }
+         %% },
+         %% {db_mgr, {etracker_mnesia_mgr, [{timeout, 60000}, {dump_interval, 3600}]}},
+         %% {db_pool, {
+         %%    [{worker_module, etracker_pgsql},
+         %%     {size, 160}, {max_overflow, 200}
+         %%    ],
+         %%    [{hostname, "127.0.0.1"},
+         %%     {database, "etracker"},
+         %%     {username, "etracker"},
+         %%     {password, "etracker"},
+         %%     {timeout, 20000}]
+         %%   }
+         %% },
+         %% {db_mgr, {etracker_pgsql_mgr, []}},
+
+         {db_pool, {
+            [{worker_module, etracker_ets},
+             {size, 128}, {max_overflow, 196}
+            ],
+            []
+           }
+         },
+
+         {db_mgr, {etracker_ets_mgr, [{dir, "etracker_data"},
+                                      {dump_interval, 3600},
+                                      {db_type, dict}
+                                      %% {db_type, ets}
+                                     ]}},
+
+         {db_cache_size, 100000},  % entries
+         {db_cache_peers_ttl, 120}, % seconds, 0 means no cache
+         {db_cache_full_scrape_ttl, 600},
+         {db_cache_dir, "etracker_data"},
+
+         {www_dir, "www"}
+        ]}
  ]}.

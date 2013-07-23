@@ -85,7 +85,7 @@ ct: compile clean-common-test-data
 test: compile eunit ct
 
 tags:
-	@ctags -e -R -f TAGS apps deps
+	@ctags -e -R -f TAGS apps deps src
 
 $(PROJECT_PLT):
 	@echo Building local plt at $(PROJECT_PLT)

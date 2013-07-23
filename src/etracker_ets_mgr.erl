@@ -80,11 +80,11 @@ handle_cast(_Msg, State) ->
     {noreply, State}.
 
 handle_info(dump_tables, S=#state{dumper_pid=undefined}) ->
-    lager:info("~p table dumper started", [?MODULE]),
+    lager:info("table dumper started", []),
     DumperPid = spawn_link(fun () -> dump_tables() end),
     {noreply, S#state{dumper_pid=DumperPid}};
 handle_info({'EXIT', Pid, _Reason}, S=#state{dumper_pid=Pid, dump_interval=DumpIval}) ->
-    lager:info("~p table dumper finished", [?MODULE]),
+    lager:info("table dumper finished", []),
     Self = self(),
     TRef = erlang:send_after(DumpIval, Self, dump_tables),
     {noreply, S#state{dumper_pid=undefined, tref=TRef}};

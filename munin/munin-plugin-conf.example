@@ -1,0 +1,20 @@
+[etracker-localhost-db]
+env.folsom_url http://localhost:8181/_stats
+env.folsom_host_name localhost
+env.folsom_category db
+env.folsom_report_title ETRACKER
+timeout 30
+
+[etracker-localhost-net]
+env.folsom_url http://localhost:8181/_stats
+env.folsom_host_name localhost
+env.folsom_category net
+env.folsom_report_title ETRACKER
+timeout 30
+
+[etracker-localhost-jobs]
+env.folsom_url http://localhost:8181/_stats
+env.folsom_host_name localhost
+env.folsom_category jobs
+env.folsom_report_title ETRACKER
+timeout 30

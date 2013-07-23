@@ -64,29 +64,29 @@ handle_call({expire, torrent_user, ExpireTime}, _From, S=#state{db_type=DT}) ->
 handle_call({expire, udp_connection_info, ExpireTime}, _From, S) ->
     Ret = process_expire_udp_connections(ExpireTime),
     {reply, Ret, S};
-handle_call({system_info, torrents}, _From, State) ->
+handle_call({stats_info, torrents}, _From, State) ->
     {reply, ets:info(torrent_info, size), State};
-handle_call({system_info, alive_torrents, Period}, _From, State) ->
+handle_call({stats_info, alive_torrents, Period}, _From, State) ->
     Reply = count_alive_torrents(Period),
     {reply, Reply, State};
-handle_call({system_info, seederless_torrents, Period}, _From, State) ->
+handle_call({stats_info, seederless_torrents, Period}, _From, State) ->
     Reply = count_seederless_torrents(Period),
     {reply, Reply, State};
-handle_call({system_info, peerless_torrents, Period}, _From, State) ->
+handle_call({stats_info, peerless_torrents, Period}, _From, State) ->
     Reply = count_peerless_torrents(Period),
     {reply, Reply, State};
-handle_call({system_info, peers}, _From, State) ->
+handle_call({stats_info, peers}, _From, State) ->
     {reply, ets:info(torrent_user, size), State};
-handle_call({system_info, seeders}, _From, State=#state{db_type=dict}) ->
+handle_call({stats_info, seeders}, _From, State=#state{db_type=dict}) ->
     Reply = gen_server:call(?DB_MGR, {count, seeders}),
     {reply, Reply, State};
-handle_call({system_info, leechers}, _From, State=#state{db_type=dict}) ->
+handle_call({stats_info, leechers}, _From, State=#state{db_type=dict}) ->
     Reply = gen_server:call(?DB_MGR, {count, leechers}),
     {reply, Reply, State};
-handle_call({system_info, seeders}, _From, State=#state{db_type=ets}) ->
+handle_call({stats_info, seeders}, _From, State=#state{db_type=ets}) ->
     Reply = ets:info(torrent_seeder, size) ,
     {reply, Reply, State};
-handle_call({system_info, leechers}, _From, State=#state{db_type=ets}) ->
+handle_call({stats_info, leechers}, _From, State=#state{db_type=ets}) ->
     Reply = ets:info(torrent_leecher, size),
     {reply, Reply, State};
 handle_call({write, TI}, _From, State) when is_record(TI, torrent_info) ->

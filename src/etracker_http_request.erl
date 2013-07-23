@@ -1,4 +1,12 @@
+%%% @author Vladimir G. Sekissov <eryx67@gmail.com>
+%%% @copyright (C) 2013, Vladimir G. Sekissov
+%%% @doc
+%%%
+%%% @end
+%%% Created : 23 Jul 2013 by Vladimir G. Sekissov <eryx67@gmail.com>
+
 -module(etracker_http_request).
+
 -behaviour(cowboy_http_handler).
 
 -export([init/3, handle/2, terminate/3]).
@@ -40,44 +48,34 @@ stats_reply_json(Req, State) ->
 
 stats_reply_html(Req, State) ->
     {Answer, Req1} = stats_process(html, Req),
-    {ok, Resp} = stats_dtl:render(Answer),
+    {ok, Resp} = etracker_stats_dtl:render(Answer),
     {Resp, Req1, State}.
 
 stats_process(Type, Req) ->
-    {QVs, Req1} = cowboy_req:qs_vals(Req),
-    ValidKeys = [atom_to_list(K) || K <- etracker:info(info_keys)],
+    {MetricId, Req1} = cowboy_req:binding(metric_id, Req),
+    {InfoVal, Req2} = cowboy_req:qs_val(<<"info">>, Req1),
+    ReqType = case InfoVal of
+                  <<"true">> -> stats_info;
+                  true -> stats_info;
+                  _ -> stats
+              end,
+    Metrics = case MetricId of
+                  undefined ->
+                      etracker:ReqType();
+                  _ ->
+                      MetricTag = metric_id_to_tag(MetricId),
+                      etracker:ReqType(MetricTag)
+              end,
     Answer =
-        try
-            Keys =
-                lists:foldl(fun ({K, V}, Acc) ->
-                                    case string:to_lower(binary_to_list(K)) of
-                                        "id" ->
-                                            V2 = string:to_lower(binary_to_list(V)),
-                                            case lists:member(V2, ValidKeys) of
-                                                true ->
-                                                    [list_to_atom(V2)|Acc];
-                                                _ ->
-                                                    error({invalid_key, V2})
-                                            end;
-                                        _ ->
-                                            Acc
-                                    end
-                            end, [], QVs),
+        begin
+            Res = lists:sort([{format_key(K), format_val(V)} || {K, V} <- Metrics]),
 
-            case {Type, etracker:info(Keys)} of
-                {json, Res} -> {[{value, {Res}}]};
-                {html, Res} -> [{value, [[{name, K}, {value, V}] || {K, V} <- Res]}]
+            case Type of
+                json -> {Res};
+                html -> [{value, [[{name, K}, {value, V}] || {K, V} <- Res]}]
             end
-        catch
-            error:E ->
-                case Type of
-                    json ->
-                        {[{error, {[E]}}]};
-                    html ->
-                        [{error, io_lib:format("~p", [E])}]
-                end
         end,
-    {Answer, Req1}.
+    {Answer, Req2}.
 
 %% http handler callbacks
 handle(Req, State=#state{request_type=announce,
@@ -146,7 +144,7 @@ scrape_request_reply_file(Preamble, Postamble, Req) ->
         false ->
             scrape_request_reply_write([], Preamble, Postamble, Req);
         {error, Reason} ->
-            lager:error("~s error on full scrape generation ~w", [?MODULE, Reason]),
+            lager:error("error on full scrape generation ~w", [Reason]),
             cowboy_req:reply(400, Req);
         {ok, FileName} ->
             WriteFs = [{fun gen_tcp:send/2, Preamble},
@@ -419,3 +417,41 @@ announce_pack_peer_compact(_P) ->
 client_random_interval(Val) ->
     VarPart = Val div 5,
     Val - VarPart + crypto:rand_uniform(1, VarPart).
+
+%% stats format
+format_key(K) ->
+    list_to_binary(format_key_(K)).
+
+format_key_(T) when is_tuple(T) ->
+    string:join([K || K <- [format_key_(K) || K <- tuple_to_list(T)], K /= []], "_");
+format_key_(K) when is_atom(K) ->
+    metric_tag_to_key(K);
+format_key_(K) when is_binary(K) ->
+    binary_to_list(K);
+format_key_(K) when is_list(K) ->
+    K.
+
+format_val(Vs=[{_,_}|_]) ->
+    {[format_val(V) || V <- Vs]};
+format_val({K, V}) when is_atom(K) ->
+    {list_to_binary(atom_to_list(K)), format_val(V)};
+format_val(V) when is_atom(V) ->
+    list_to_binary(atom_to_list(V));
+format_val(V) ->
+    V.
+
+metric_id_to_tag(<<"jobs">>) ->
+    etracker_jobs;
+metric_id_to_tag(<<"net">>) ->
+    etracker_event;
+metric_id_to_tag(<<"db">>) ->
+    etracker_db.
+
+metric_tag_to_key(etracker_jobs) ->
+    [];
+metric_tag_to_key(etracker_event) ->
+    [];
+metric_tag_to_key(etracker_db) ->
+    [];
+metric_tag_to_key(V) ->
+    atom_to_list(V).

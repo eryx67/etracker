@@ -11,7 +11,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0]).
+-export([start_link/0, job_queue_name/0]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -23,7 +23,6 @@
 -include("etracker.hrl").
 
 -record(state, {pool_pid,
-                max_connections = infinity,
                 socket,
                 secrets={<<0>>, <<0>>}
                }).
@@ -31,15 +30,15 @@
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
+job_queue_name() ->
+    etracker_udp.
+
 init([]) ->
     Self = self(),
     Port = confval(udp_port, 8080),
-    SocketOpts = [binary, {active, true}, {buffer, 2048}],
+    SocketOpts = [binary, {active, once}, {buffer, 2048}],
     SocketOpts1 = confopts(udp_ip, ip, SocketOpts, {127, 0, 0, 1}),
     {ok, Socket} = gen_udp:open(Port, SocketOpts1),
-
-    MaxConn = confval(udp_max_connections, 1024),
-
     WorkerParams = lists:map(fun ({Attr, Default}) ->
                                      {Attr, confval(Attr, Default)}
                              end,
@@ -50,11 +49,10 @@ init([]) ->
                              ]),
     {ok, PoolPid} = etracker_udp_sup:start_link(etracker_udp_request, WorkerParams),
     IpStr = inet_parse:ntoa(proplists:get_value(ip, SocketOpts1)),
-    lager:info("~s listening on udp://~s:~B/~n", [?SERVER, IpStr, Port]),
+    lager:info("listening on udp://~s:~B/~n", [IpStr, Port]),
     Secret = gen_secret(),
     erlang:send_after(?SECRET_TIMEOUT, Self, expire_secrets),
     {ok, #state{pool_pid=PoolPid,
-                max_connections = MaxConn,
                 socket=Socket,
                 secrets={Secret, Secret}
                }}.
@@ -68,7 +66,7 @@ handle_cast({answer, Peer, Answer}, S=#state{socket=Socket}) ->
     ok = gen_udp:send(Socket, Ip, Port, Answer),
     {noreply, S};
 handle_cast(Msg, State) ->
-    lager:debug("~s unknown cast ~w", [?SERVER, Msg]),
+    lager:debug("unknown cast ~w", [Msg]),
     {noreply, State}.
 
 handle_info(expire_secrets, S) ->
@@ -77,9 +75,10 @@ handle_info(expire_secrets, S) ->
     {noreply, expire_secrets(S)};
 handle_info({udp, Socket, Ip, PortNo, Packet}, S=#state{socket=Socket})
   when size(Packet) >= 16 ->
+    inet:setopts(Socket, [{active, once}]),
     << ConnId:8/binary, Action:4/binary, Data/binary >> = Packet,
-    lager:debug("~s received packet from ~w, action ~w, connection id ~w",
-                [?SERVER, {Ip, PortNo}, Action, ConnId]),
+    lager:debug("received packet from ~w, action ~w, connection id ~w",
+                [{Ip, PortNo}, Action, ConnId]),
     Req =
         case check_connection_id(Action, ConnId, Ip, PortNo, S) of
             {ok, ConnId1} ->
@@ -89,8 +88,12 @@ handle_info({udp, Socket, Ip, PortNo, Packet}, S=#state{socket=Socket})
         end,
     start_worker(Req, S),
     {noreply, S};
+handle_info({udp, Socket, Ip, PortNo, Packet}, S=#state{socket=Socket}) ->
+    lager:debug("bad packet ~w from ~w", [Packet, {Ip, PortNo}]),
+    inet:setopts(Socket, [{active, once}]),
+    {noreply, S};
 handle_info(Info, State) ->
-    lager:debug("~s unknown info ~w", [?SERVER, Info]),
+    lager:debug("unknown info ~w", [Info]),
     {noreply, State}.
 
 terminate(_Reason, _State) ->
@@ -102,36 +105,18 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-start_worker(Msg, S=#state{pool_pid=PoolPid}) ->
-    Overflow = workers_number_is_overflowed(S),
-    if  Overflow ->
-            lager:warning("~p max number of connections excided, skipping connection", [?MODULE]);
-        true ->
-            Self = self(),
-            {ok, _WorkerPid} = supervisor:start_child(PoolPid, [Self, Msg])
-    end.
-
-workers_number_is_overflowed(S=#state{max_connections=MaxConn}) ->
-    case MaxConn of
-        infinity ->
-            false;
-        _ ->
-            WN = workers_number(S),
-            if WN > MaxConn ->
-                    true;
-               true ->
-                    false
-            end
-    end.
-
-workers_number(#state{pool_pid=PoolPid}) ->
-    proplists:get_value(workers, supervisor:count_children(PoolPid)).
+start_worker(Msg, _S=#state{pool_pid=PoolPid}) ->
+    Self = self(),
+    etracker_jobs:add_job(job_queue_name(),
+                          fun () ->
+                                  {ok, _WorkerPid} = supervisor:start_child(PoolPid, [Self, Msg])
+                          end).
 
 check_connection_id(?UDP_ACTION_CONNECT, ?UDP_CONNECTION_ID, Ip, PortNo,
                     _S=#state{secrets={S1, _S2}}) ->
     {ok, gen_connection_id(Ip, PortNo, S1)};
 check_connection_id(?UDP_ACTION_CONNECT, ConnId, Ip, PortNo, _S) ->
-    lager:debug("~s invalid initial connection id ~w, peer ~w", [?SERVER, ConnId, {Ip, PortNo}]),
+    lager:debug("invalid initial connection id ~w, peer ~w", [ConnId, {Ip, PortNo}]),
     {error, << "invalid_connection_id" >>};
 check_connection_id(_A, ConnId, Ip, PortNo, _S=#state{secrets={S1, S2}}) ->
     case (ConnId == gen_connection_id(Ip, PortNo, S1)

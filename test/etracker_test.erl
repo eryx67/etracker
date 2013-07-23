@@ -2,11 +2,11 @@
 
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("stdlib/include/ms_transform.hrl").
--include("etracker.hrl").
+-include("../include/etracker.hrl").
 
 -define(PEERS, test_peers).
 -define(TRACKER_URL, "http://localhost:8181").
--define(TRACKER_PEER, {{127, 0, 0, 1}, 8080}).
+-define(TRACKER_PEER, {{127, 0, 0, 1}, 8181}).
 
 etracker_test_() ->
     {setup,
@@ -305,10 +305,10 @@ check_stats_after_clean() ->
           {<<"leechers">>, 0},
           {<<"peers">>, 0},
           {<<"unknown_queries">>, 0},
-          {<<"invalid_queries">>, 0},
-          {<<"scrapes">>, 0},
-          {<<"announces">>, 0},
-          {<<"failed_queries">>, 0},
+          {<<"invalid_queries">>, 2},
+          {<<"scrapes">>, 2},
+          {<<"announces">>, 17},
+          {<<"failed_queries">>, 1},
           {<<"deleted_peers">>, 3}],
     check_stats(KV).
 
@@ -326,14 +326,22 @@ check_stats_after_test(_) ->
     check_stats(KV).
 
 check_stats(KV) ->
-    {ok, {{200, _}, _, Resp}} = lhttpc:request("http://localhost:8080/stats", get,
+    etracker_db:stats_update(),
+    {ok, {{200, _}, _, Resp}} = lhttpc:request("http://localhost:8181/_stats", get,
                                                [{"Content-Type", "application/json"}], "", 1000),
 
     Res = jiffy:decode(Resp),
-    ?debugVal(Res),
-    {[{<<"value">>, {KV2}}]} = Res,
-    [?_assertMatch({[{<<"value">>, _}]}, Res),
-     [?_assertEqual({K, V}, {K, proplists:get_value(K, KV2)}) || {K, V} <- KV]
+    ?debugFmt("~p~n", [Res]),
+    {KV2} = Res,
+    GetValF = fun (K) ->
+                      case proplists:get_value(K, KV2) of
+                          {KKV} ->
+                              proplists:get_value(<<"count">>, KKV);
+                          Val ->
+                              Val
+                      end
+              end,
+    [[?_assertEqual({K, V}, {K, GetValF(K)}) || {K, V} <- KV]
     ].
 
 scrape_all(_Ann) ->
@@ -496,8 +504,6 @@ all_torrent_info_hashes() ->
     {ok, {WorkerArgs, _}} = etracker_env:get(db_pool),
     Mod = proplists:get_value(worker_module, WorkerArgs),
     case Mod of
-        etracker_mnesia ->
-            mnesia:activity(transaction, fun () -> mnesia:all_keys(torrent_info) end);
         etracker_pgsql ->
             Q = "select info_hash from torrent_info",
             {ok, _C, Rows} = etracker_db:db_call({equery, Q, []}),
@@ -512,8 +518,6 @@ write_record(Rec) ->
     {ok, {WorkerArgs, _}} = etracker_env:get(db_pool),
     Mod = proplists:get_value(worker_module, WorkerArgs),
     case Mod of
-        etracker_mnesia ->
-            mnesia:activity(transaction, fun () -> mnesia:write(Rec) end);
         _ ->
             ok = etracker_db:db_call({write, Rec})
     end.
@@ -522,36 +526,6 @@ delete_record(Rec) ->
     {ok, {WorkerArgs, _}} = etracker_env:get(db_pool),
     Mod = proplists:get_value(worker_module, WorkerArgs),
     case Mod of
-        etracker_mnesia ->
-            mnesia:activity(transaction, fun () -> mnesia:delete_object(Rec) end);
         _ ->
             etracker_db:db_call({delete, Rec})
-    end.
-
-now_to_timestamp(Time) ->
-    calendar:now_to_local_time(Time).
-
-timestamp_to_now({D, {HH, MM, SSMS}}) ->
-    SS = erlang:trunc(SSMS),
-    Seconds = calendar:datetime_to_gregorian_seconds({D, {HH, MM, SS}}) - 62167219200,
-    %% 62167219200 == calendar:datetime_to_gregorian_seconds({{1970, 1, 1}, {0, 0, 0}})
-    {Seconds div 1000000, Seconds rem 1000000, erlang:trunc((SSMS - SS) * 1000000)}.
-
-now_sub_sec(Now, Seconds) ->
-    {Mega, Sec, Micro} = Now,
-    SubMega = Seconds div 1000000,
-    SubSec = Seconds rem 1000000,
-    Mega1 = Mega - SubMega,
-    Sec1 = Sec - SubSec,
-    {Mega2, Sec2} = if Mega1 < 0 ->
-                            exit(badarg);
-                       (Sec1 < 0) ->
-                            {Mega1 - 1, 1000000 + Sec1};
-                       true ->
-                            {Mega1, Sec1}
-                    end,
-    if (Mega2 < 0) ->
-            exit(badarg);
-       true ->
-            {Mega2, Sec2, Micro}
     end.

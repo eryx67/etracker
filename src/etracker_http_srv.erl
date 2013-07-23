@@ -58,7 +58,8 @@ dispatch_rules() ->
                                  ]}
             , {"/announce", etracker_http_request, {announce, AnnounceParams}}
             , {"/scrape", etracker_http_request, {scrape, ScrapeParams}}
-            , {"/stats", etracker_http_request, {stats, CommonParams}}
+            , {"/_stats", etracker_http_request, {stats, CommonParams}}
+            , {"/_stats/[:metric_id]", etracker_http_request, {stats, CommonParams}}
            ]}].
 
 %%%===================================================================
@@ -67,11 +68,11 @@ dispatch_rules() ->
 
 init([]) ->
     process_flag(trap_exit, true),
-    Port = confval(http_port, 8080),
+    Port = confval(http_port, 8181),
     Ip = confval(http_ip, "127.0.0.1"),
     NumAcceptors = confval(http_num_acceptors, 16),
     IpStr = case is_list(Ip) of true -> Ip; false -> inet_parse:ntoa(Ip) end,
-    lager:info("~s listening on http://~s:~B/~n", [?SERVER, IpStr,Port]),
+    lager:info("listening on http://~s:~B/~n", [IpStr,Port]),
     Dispatch = cowboy_router:compile(dispatch_rules()),
     {ok, _Pid} = cowboy:start_http(?HTTP_LISTENER, NumAcceptors,
                                    [{port, Port}
