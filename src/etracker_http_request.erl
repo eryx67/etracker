@@ -134,7 +134,7 @@ scrape_request_reply(Req, Params) ->
         error:Error ->
             etracker_event:failed_query({scrape, Error}),
             lager:error("error when parsing scrape ~w, backtrace ~p~n",
-                         [Error,erlang:get_stacktrace()]),
+                        [Error,erlang:get_stacktrace()]),
             cowboy_req:reply(400, Headers, <<"Invalid request">>, Req)
     end.
 
@@ -324,8 +324,20 @@ request_attr_key(Attr) ->
     list_to_binary(atom_to_list(Attr)).
 
 request_attr_default(ip, Req) ->
-    {{IP, _Port}, Req1} = cowboy_req:peer(Req),
-    {IP, Req1};
+    case cowboy_req:header(<<"x-real-ip">>, Req, undefined) of
+        {Val, Req1} when is_binary(Val) ->
+            {ok, IP} = inet_parse:address(binary_to_list(Val)),
+            {IP, Req1};
+        {undefined, _} ->
+            case cowboy_req:parse_header(<<"x-forwarded-for">>, Req, undefined) of
+                {ok, [Val|_], Req1} ->
+                    {ok, IP} = inet_parse:address(binary_to_list(Val)),
+                    {IP, Req1};
+                _ ->
+                    {{IP, _Port}, Req1} = cowboy_req:peer(Req),
+                    {IP, Req1}
+            end
+    end;
 request_attr_default(key, Req) ->
     cowboy_req:qs_val(<<"peer_id">>, Req);
 request_attr_default(compact, Req) ->
