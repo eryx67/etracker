@@ -11,11 +11,13 @@
                   stdlib,
                   syntax_tools,
                   compiler,
+                  goldrush,
                   lager,
                   crypto,
                   mimetypes,
                   gproc,
                   ranch,
+                  cowlib,
                   cowboy,
                   folsom,
                   etsachet

@@ -33,7 +33,7 @@ process_request({request, Peer, {Action, ConnId, Data}}, Params) ->
             {ok, {answer, Peer, Answer}}
     end;
 process_request({bad_request, Peer, {_Action, _ConnId, Reason}}, _Args) ->
-    lager:error("invalid query ~p, peer ~w", [Reason, Peer]),
+    lager:debug("invalid query ~p, peer ~w", [Reason, Peer]),
     etracker_event:invalid_query({udp, Peer, Reason}),
     ok.
 

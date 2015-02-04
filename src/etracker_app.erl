@@ -8,8 +8,7 @@
 
 start() ->
     application:load(?APP),
-    start_app_deps(?APP),
-    application:start(?APP).
+    application:ensure_all_started(?APP).
 
 %% ===================================================================
 %% Application callbacks
@@ -19,16 +18,3 @@ start(_StartType, _StartArgs) ->
 
 stop(_State) ->
     ok.
-
-start_app_deps(App) ->
-    {ok, DepApps} = application:get_key(App, applications),
-    lists:foreach(fun ensure_started/1, DepApps),
-    ok.
-
-ensure_started(App) ->
-    case application:start(App) of
-        ok ->
-            ok;
-        {error, {already_started, App}} ->
-            ok
-    end.

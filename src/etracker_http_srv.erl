@@ -52,14 +52,12 @@ dispatch_rules() ->
                                 {scrape_request_interval, 60 * 30}
                                ]) ++ CommonParams,
     %% {Host, list({Path, Handler, Opts})}
-    [{'_', [{"/", cowboy_static, [{directory, WwwDir}
-                                  , {file, <<"html/index.html">>}
-                                  , {mimetypes, {fun mimetypes:path_to_mimes/2, default}}
-                                 ]}
-            , {"/announce", etracker_http_request, {announce, AnnounceParams}}
-            , {"/scrape", etracker_http_request, {scrape, ScrapeParams}}
-            , {"/_stats", etracker_http_request, {stats, CommonParams}}
-            , {"/_stats/[:metric_id]", etracker_http_request, {stats, CommonParams}}
+    [{'_', [{"/", cowboy_static, {file, filename:join(WwwDir, "html/index.html"),
+                                  [{mimetypes, {<<"text">>, <<"html">>, []}}]}}
+           , {"/announce", etracker_http_request, {announce, AnnounceParams}}
+           , {"/scrape", etracker_http_request, {scrape, ScrapeParams}}
+           , {"/_stats", etracker_http_request, {stats, CommonParams}}
+           , {"/_stats/[:metric_id]", etracker_http_request, {stats, CommonParams}}
            ]}].
 
 %%%===================================================================

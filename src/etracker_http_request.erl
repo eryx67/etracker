@@ -178,7 +178,14 @@ scrape_request_reply_write(IHs, Preamble, Postamble, Req) ->
                          ok;
                      (TorrentInfos) ->
                          Data = scrape_pack_torrent_infos(TorrentInfos),
-                         ok = cowboy_req:chunk(Data, Req1)
+                         case cowboy_req:chunk(Data, Req1) of
+                             ok ->
+                                 ok;
+                             {error, closed} ->
+                                 ok;
+                             {error, etimedout} ->
+                                 ok
+                         end
                  end,
     ok = etracker_db:torrent_infos(IHs, ResultsFun),
     ok = cowboy_req:chunk(Postamble, Req1),

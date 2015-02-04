@@ -51,6 +51,8 @@ etracker_cleaner_test_() ->
 
 start_apps() ->
     application:start(asn1),
+    application:ensure_all_started(lager),
+    application:ensure_all_started(cowboy),
     etorrent:start_app(),
     etracker:start(),
     timer:sleep(5000),
