@@ -28,7 +28,10 @@
                         peers
                       ]).
 
--define(TIMEOUT, 60 * 1000).
+-define(STATS_COUNTERS, [rejected]).
+
+-define(TIMEOUT, 30 * 1000).
+-define(JOBS_LIMIT, 8192).
 
 start_link() ->
     {ok, Cwd} = file:get_cwd(),
@@ -60,7 +63,17 @@ init_stats() ->
                               true ->
                                   ok
                           end
-                  end, ?STATS_DB_KEYS).
+                  end, ?STATS_DB_KEYS),
+    lists:foreach(fun (CN) ->
+                          Cnt = {?STATS_TAG, CN},
+                          case folsom_metrics:metric_exists(Cnt) of
+                              false ->
+                                  folsom_metrics:new_spiral(Cnt),
+                                  folsom_metrics:tag_metric(Cnt, ?STATS_TAG);
+                              true ->
+                                  ok
+                          end
+                  end, ?STATS_COUNTERS).
 
 stats_update() ->
     FullPeriodNames = [seeders, leechers, torrents, peers],
@@ -75,6 +88,9 @@ stats_update() ->
 stats_set(Name, Val) ->
     Cnt = {?STATS_TAG, Name},
     ok = folsom_metrics:notify({Cnt, Val}).
+
+stats_inc(Name, Val) ->
+    stats_set(Name, Val).
 
 announce(Ann) ->
 	db_call({announce, Ann}).
@@ -197,9 +213,16 @@ confval(Key, Default) ->
     etracker_env:get(Key, Default).
 
 db_call(Args) ->
-    db_call(Args, ?TIMEOUT).
+    db_call(Args, 5000).
 
 db_call(Args, Timeout) ->
+    {message_queue_len, Len} = process_info(whereis(?SERVER), message_queue_len),
+    if Len > ?JOBS_LIMIT ->
+            stats_inc(rejected, 1),
+            throw({error, rejected});
+       true ->
+            ok
+    end,
     poolboy:transaction(?SERVER,
                         fun (W) ->
                                 gen_server:call(W, Args, Timeout)
@@ -207,6 +230,13 @@ db_call(Args, Timeout) ->
                         Timeout).
 
 db_cast(Args) ->
+    {message_queue_len, Len} = process_info(whereis(?SERVER), message_queue_len),
+    if Len > ?JOBS_LIMIT ->
+            stats_inc(rejected, 1),
+            throw({error, rejected});
+       true ->
+            ok
+    end,
     poolboy:transaction(?SERVER,
                         fun (W) ->
                                 gen_server:cast(W, Args)

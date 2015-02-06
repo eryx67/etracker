@@ -56,6 +56,8 @@ process_request(ActionCode, ConnId, Peer, Data, Params) ->
                                 answer_error(TrId, Reason)
                         end
                     catch
+                        throw:{error, rejected} ->
+                            answer_error(TrId, << "busy" >>);
                         throw:Error ->
                             lager:error("invalid request, error ~p, action ~p, connection ~w, peer ~w, data ~w",
                                         [Error, Action, ConnId, Peer, Data]),
@@ -200,12 +202,19 @@ pack_answer(Action, TrId, Data) when is_atom(Action) ->
 pack_answer(ActionCode, TrId, Data) ->
     << ActionCode/binary, TrId/binary, Data/binary >>.
 
-check_connection_id(connect, ConnId) ->
+check_connection_id(Action, ConnId) ->
+    try check_connection_id_1(Action, ConnId)
+    catch
+        throw:{error, rejected} ->
+            false
+    end.
+
+check_connection_id_1(connect, ConnId) ->
     etracker_db:write(#udp_connection_info{
                          id = ConnId
                         }),
     true;
-check_connection_id(_A, ConnId) ->
+check_connection_id_1(_A, ConnId) ->
     case etracker_db:member(udp_connection_info, ConnId) of
         true ->
             etracker_db:write(#udp_connection_info{

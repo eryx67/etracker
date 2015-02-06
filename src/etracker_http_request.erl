@@ -105,8 +105,9 @@ terminate(_Reason, _Req, _State) ->
 %% Internal functions
 scrape_request_reply(Req, Params) ->
     Headers = [{<<"content-type">>, <<"text/plain">>}],
-    try parse_request(scrape, Req) of
-        {IHs, Req1} ->
+    try
+        begin
+            {IHs, Req1} = parse_request(scrape, Req),
             etracker_event:scrape(#scrape{info_hashes=IHs, protocol=http}),
             SRI = proplists:get_value(scrape_request_interval, Params),
             Preamble = ["d",
@@ -125,7 +126,11 @@ scrape_request_reply(Req, Params) ->
                 _ ->
                     scrape_request_reply_write(IHs, Preamble, Postamble, Req2)
             end
+        end
     catch
+        throw:{error, rejected} ->
+            Body = etracker_bcoding:encode([{<<"failure reason">>, <<"busy">>}]),
+            cowboy_req:reply(200, Headers, Body, Req);
         throw:Error ->
             lager:error("invalid scrape, error ~w~n** Request was ~w~n", [Error, Req]),
             etracker_event:invalid_query({scrape, Error}),
@@ -192,8 +197,9 @@ scrape_request_reply_write(IHs, Preamble, Postamble, Req) ->
     {ok, Req1}.
 
 announce_request_reply(Req, Params) ->
-    try parse_request(announce, Req) of
-        {Ann, Req1} ->
+    try
+        begin
+            {Ann, Req1} = parse_request(announce, Req),
             #announce{
                info_hash=IH,
                peer_id=PI,
@@ -224,7 +230,11 @@ announce_request_reply(Req, Params) ->
                                             {<<"peers">>, announce_reply_peers(Peers3, NPI, Compact)}
                                            ]),
             {Body, 200, Req1}
+        end
     catch
+        throw:{error, rejected} ->
+            {RetCode, Reason} = {200, <<"busy">>},
+            {etracker_bcoding:encode([{<<"failure reason">>, Reason}]), RetCode, Req};
         throw:Error ->
             lager:error("invalid announce, error ~w~n** Request was ~w~n", [Error, Req]),
             etracker_event:invalid_query({announce, Error}),
