@@ -513,7 +513,12 @@ all_torrent_info_hashes() ->
         etracker_ets ->
             ets:select(torrent_info, ets:fun2ms(fun (#torrent_info{info_hash=IH}) ->
                                                         IH
-                                                end))
+                                                end));
+        etracker_mnesia ->
+            Q = ets:fun2ms(fun (#torrent_info{info_hash=IH}) ->
+                                   IH
+                           end),
+            mnesia:activity(async_dirty, fun mnesia:select/2, [etracker_mnesia_mgr:table_name(torrent_info), Q], mnesia_frag)
     end.
 
 write_record(Rec) ->
